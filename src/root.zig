@@ -11,38 +11,43 @@ const AST = struct {
     parent: ?*const AST,
 
     const Node = union(enum) {
-        token: Token,
-        children: std.ArrayList(AST),
-    };
-    const Token = union(enum) {
         binding: []const u8,
         num: i64,
         float: f64,
         str: []const u8,
+        // Either a leaf (token) or a list of children
+        children: std.ArrayList(AST),
     };
 
     fn print(self: *const AST) void {
+        self.print_rec(0);
+    }
+
+    fn print_rec(self: *const AST, level: u32) void {
+        for (0..level) |_| {
+            std.debug.print("\t", .{});
+        }
         switch (self.val) {
-            .token => |tok| {
-                switch (tok) {
-                    .binding => |binding_name| {
-                        std.debug.print("BINDING:{s}\n", .{binding_name});
-                    },
-                    .num => |num| {
-                        std.debug.print("INT:\t{d}\n", .{num});
-                    },
-                    .float => |f| {
-                        std.debug.print("FLOAT:\t{d}\n", .{f});
-                    },
-                    .str => |s| {
-                        std.debug.print("{s}\n", .{s});
-                    },
-                }
+            .binding => |binding_name| {
+                std.debug.print("BINDING:{s}\n", .{binding_name});
+            },
+            .num => |num| {
+                std.debug.print("INT:\t{d}\n", .{num});
+            },
+            .float => |f| {
+                std.debug.print("FLOAT:\t{d}\n", .{f});
+            },
+            .str => |s| {
+                std.debug.print("STRING :\t{s}\n", .{s});
             },
             .children => |children| {
                 std.debug.print("<\n", .{});
                 for (children.items) |child| {
-                    print(&child);
+                    child.print_rec(level + 1);
+                }
+
+                for (0..level) |_| {
+                    std.debug.print("\t", .{});
                 }
                 std.debug.print(">\n", .{});
             },
@@ -57,17 +62,13 @@ const AST = struct {
                 }
                 @constCast(&children).deinit(alloc);
             },
-            .token => |tok| {
-                switch (tok) {
-                    .binding => |b| {
-                        alloc.free(b);
-                    },
-                    .str => |str| {
-                        alloc.free(str);
-                    },
-                    else => {},
-                }
+            .binding => |b| {
+                alloc.free(b);
             },
+            .str => |str| {
+                alloc.free(str);
+            },
+            else => {},
         }
     }
 };
@@ -85,7 +86,6 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
                     continue :start text[text_ptr];
                 },
                 '(' => {
-                    text_ptr += 1;
                     continue :parse .expr;
                 },
                 0 => {
@@ -120,8 +120,12 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
                     text_ptr += 1;
                     continue :token text[text_ptr];
                 },
-                ' ', ')' => {
+                ' ', '\t', '\r', '\n' => {
+                    // End of token: save string as token and continue
                     text_ptr += 1;
+                    break :token;
+                },
+                ')' => {
                     break :token;
                 },
                 0 => {
@@ -135,30 +139,37 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
             if (is_num) {
                 if (is_float) {
                     const float = try std.fmt.parseFloat(f64, str);
-                    try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .token = .{ .float = float } } });
+                    try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .float = float } });
                 } else {
                     const num = try std.fmt.parseInt(i64, str, 10);
-                    try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .token = .{ .num = num } } });
+                    try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .num = num } });
                 }
+                // String not used later, only the parsed number value
                 alloc.free(str);
             } else {
-                try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .token = .{ .binding = str } } });
+                try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .binding = str } });
             }
             continue :parse .expr;
         },
         .expr => {
             expr: switch (text[text_ptr]) {
+                ' ', '\t', '\r', '\n' => {
+                    text_ptr += 1;
+                    continue :expr text[text_ptr];
+                },
                 '(' => {
                     // Beginning of new sub-expression
                     const child_list = try std.ArrayList(AST).initCapacity(alloc, 8);
-                    var node = AST{ .parent = cur_ast, .val = AST.Node{ .children = child_list } };
-                    try cur_ast.val.children.append(alloc, node);
-                    cur_ast = &node;
+                    // var node = AST{ .parent = cur_ast, .val = AST.Node{ .children = child_list } };
+                    try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .children = child_list } });
+                    cur_ast = &cur_ast.val.children.items[cur_ast.val.children.items.len - 1];
+                    text_ptr += 1;
                     continue :expr text[text_ptr];
                 },
                 ')' => {
                     // End of expression
                     cur_ast = @constCast(cur_ast.parent.?);
+                    text_ptr += 1;
                     continue :expr text[text_ptr];
                 },
                 'a'...'z', 'A'...'Z', '0'...'9', '+', '-', '=', '_' => {
@@ -189,7 +200,7 @@ test "parse newlines" {
 
 test "parse number" {
     const alloc = std.testing.allocator;
-    const text: [:0]const u8 = "5";
+    const text: [:0]const u8 = "5\n10";
     var ast = try scheme_parse(text, alloc);
     defer ast.deinit(alloc);
     ast.print();
@@ -216,7 +227,7 @@ test "parse binding" {
 
 test "parse let" {
     const alloc = std.testing.allocator;
-    const text: [:0]const u8 = "(let ((a 3)) a)";
+    const text: [:0]const u8 = "(let (a 3) a)";
     var ast = try scheme_parse(text, alloc);
     defer ast.deinit(alloc);
     ast.print();
@@ -226,6 +237,15 @@ test "parse let" {
 test "parse expr" {
     const alloc = std.testing.allocator;
     const text: [:0]const u8 = "(funcname 5 3)";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    ast.print();
+    // try std.testing.expectEqualDeep(AST{ .parent = null, .val = AST.Child{ .tree = std.ArrayList(AST).initCapacity(alloc, 8) } }, ast);
+}
+
+test "parse nested parens" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "((()))";
     var ast = try scheme_parse(text, alloc);
     defer ast.deinit(alloc);
     ast.print();

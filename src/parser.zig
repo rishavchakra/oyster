@@ -4,6 +4,7 @@ const ParseStage = enum {
     start,
     token,
     expr,
+    quot,
 };
 
 pub const AST = struct {
@@ -14,9 +15,33 @@ pub const AST = struct {
         binding: []const u8,
         num: i64,
         float: f64,
+        char: u8,
         str: []const u8,
         // Either a leaf (token) or a list of children
         children: std.ArrayList(AST),
+
+        pub fn print(self: Node) void {
+            switch (self) {
+                .binding => |binding_name| {
+                    std.debug.print("BINDING:{s}\n", .{binding_name});
+                },
+                .num => |num| {
+                    std.debug.print("INT:\t{d}\n", .{num});
+                },
+                .float => |f| {
+                    std.debug.print("FLOAT:\t{d}\n", .{f});
+                },
+                .char => |c| {
+                    std.debug.print("CHAR:\t{d}\n", .{c});
+                },
+                .str => |s| {
+                    std.debug.print("STRING :\t{s}\n", .{s});
+                },
+                .children => {
+                    std.debug.print("PARENT NODE\n", .{});
+                },
+            }
+        }
     };
 
     pub fn print(self: *const AST) void {
@@ -36,6 +61,9 @@ pub const AST = struct {
             },
             .float => |f| {
                 std.debug.print("FLOAT:\t{d}\n", .{f});
+            },
+            .char => |c| {
+                std.debug.print("CHAR:\t{d}\n", .{c});
             },
             .str => |s| {
                 std.debug.print("STRING :\t{s}\n", .{s});
@@ -151,6 +179,33 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
             }
             continue :parse .expr;
         },
+        .quot => {
+            var chars_list = try std.ArrayList(u8).initCapacity(alloc, 16);
+            defer chars_list.deinit(alloc);
+            var num_chars: usize = 0;
+            quot: switch (text[text_ptr]) {
+                '\'' => {
+                    // End quote
+                    break :quot;
+                },
+                7...38, 40...127 => {
+                    // Non-control characters
+                    num_chars += 1;
+                },
+                0 => {
+                    break :quot;
+                },
+                else => unreachable, // Not possible with ASCII characters
+            }
+
+            if (num_chars == 1) {
+                // Found a single character
+                try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .char = chars_list.items[0] } });
+            } else {
+                // We have a quot expression. Handle this later, it's annoying
+            }
+            continue :parse .expr;
+        },
         .expr => {
             expr: switch (text[text_ptr]) {
                 ' ', '\t', '\r', '\n' => {
@@ -174,6 +229,10 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
                 },
                 'a'...'z', 'A'...'Z', '0'...'9', '+', '-', '=', '_' => {
                     continue :parse .token;
+                },
+                '\'' => {
+                    text_ptr += 1;
+                    continue :parse .quot;
                 },
                 0 => {
                     // EOF

@@ -15,6 +15,7 @@ pub const AST = struct {
         binding: []const u8,
         num: i64,
         float: f64,
+        boolean: bool,
         char: u8,
         str: []const u8,
         // Either a leaf (token) or a list of children
@@ -30,6 +31,9 @@ pub const AST = struct {
                 },
                 .float => |f| {
                     std.debug.print("FLOAT:\t{d}\n", .{f});
+                },
+                .boolean => |b| {
+                    std.debug.print("BOOL:\t{any}\n", .{b});
                 },
                 .char => |c| {
                     std.debug.print("CHAR:\t{d}\n", .{c});
@@ -61,6 +65,9 @@ pub const AST = struct {
             },
             .float => |f| {
                 std.debug.print("FLOAT:\t{d}\n", .{f});
+            },
+            .boolean => |b| {
+                std.debug.print("BOOL:\t{any}\n", .{b});
             },
             .char => |c| {
                 std.debug.print("CHAR:\t{d}\n", .{c});

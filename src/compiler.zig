@@ -73,7 +73,7 @@ pub const OpCode = packed union {
     /// because they are string pointers which may step on opcode tags
     binding: [*]const u8,
 
-    pub fn read_val(self: OpCode) !OpCodeType {
+    pub fn type_of(self: OpCode) !OpCodeType {
         // Read from the tags to get the true value and type of the opcode
         const as_int = self.int;
         if (as_int.tag == 0b00) {
@@ -96,7 +96,7 @@ pub const OpCode = packed union {
     }
 
     pub fn print(self: OpCode) void {
-        const op = read_val(self);
+        const op = type_of(self);
         std.debug.print("{s}:\t", .{@tagName(op)});
         switch (op) {
             .binding => |binding| {
@@ -136,7 +136,12 @@ pub const OpCodeType = enum {
     float,
 };
 
-pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !std.ArrayList(OpCode) {
+pub const CompileOutput = struct {
+    statics: []const u8,
+    code: []OpCode,
+};
+
+pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput {
     var visited: std.AutoHashMap(*const parser.AST, void) = .init(alloc);
     var dfs_stack: std.ArrayList(*const parser.AST) = try .initCapacity(alloc, 16);
     defer visited.deinit();
@@ -201,6 +206,11 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !std.ArrayList(
     }
 
     try opcode_list.append(alloc, OpCode{ .instr = .Return });
+    const code = try opcode_list.toOwnedSlice(alloc);
 
-    return opcode_list;
+    return CompileOutput{
+        .code = code,
+        .statics = "",
+    };
+    // return opcode_list;
 }

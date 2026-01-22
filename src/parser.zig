@@ -138,7 +138,7 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
             var is_num = true;
             var is_float = false;
             token: switch (text[text_ptr]) {
-                'a'...'z', 'A'...'Z', '+', '-', '=', '_' => |char| {
+                'a'...'z', 'A'...'Z', '+', '-', '=', '_', '*' => |char| {
                     is_num = false;
                     try chars_list.append(alloc, char);
                     text_ptr += 1;
@@ -234,7 +234,7 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
                     text_ptr += 1;
                     continue :expr text[text_ptr];
                 },
-                'a'...'z', 'A'...'Z', '0'...'9', '+', '-', '=', '_' => {
+                'a'...'z', 'A'...'Z', '0'...'9', '+', '-', '=', '_', '*' => {
                     continue :parse .token;
                 },
                 '\'' => {

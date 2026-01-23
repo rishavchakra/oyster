@@ -3,7 +3,7 @@ const parser = @import("parser.zig");
 
 pub const Instr = enum(u64) {
     Push = 0b00_0011_1111, // LOAD64
-    Pop = 0b01_0011_1111,
+    Jump = 0b01_0011_1111,
     Eval = 0b10_0011_1111,
     Return = 0b11_0011_1111,
 };
@@ -69,6 +69,7 @@ pub const OpCode = packed union {
     boolean: Boolean,
     char: Char,
     float: Float,
+    codepoint: usize,
     /// Bindings are not interpreted in the same way as other opcodes
     /// because they are string pointers which may step on opcode tags
     binding: *const []const u8,
@@ -114,6 +115,9 @@ pub const OpCode = packed union {
             .char => {
                 std.debug.print("\t{d}\n", .{self.char.val});
             },
+            .codepoint => {
+                std.debug.print("\t{d}\n", .{self.codepoint});
+            },
             .raw => {
                 std.debug.print("\t{d}\n", .{self.raw});
             },
@@ -151,121 +155,120 @@ pub const CompileOutput = struct {
 };
 
 pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput {
-    var visited: std.AutoHashMap(*const parser.AST, void) = .init(alloc);
-    var dfs_stack: std.ArrayList(*const parser.AST) = try .initCapacity(alloc, 16);
-    defer visited.deinit();
-    defer dfs_stack.deinit(alloc);
     var statics: std.ArrayList(u8) = try .initCapacity(alloc, 64);
-
     var opcode_list: std.ArrayList(OpCode) = try .initCapacity(alloc, 16);
+    try compile_rec(ast, &opcode_list, &statics, alloc);
+    try opcode_list.append(alloc, OpCode{ .instr = .Return });
+    return CompileOutput{
+        .statics = try statics.toOwnedSlice(alloc),
+        .code = try opcode_list.toOwnedSlice(alloc),
+    };
+}
 
-    try dfs_stack.append(alloc, ast);
-    while (dfs_stack.items.len > 0) {
-        const cur_ast = dfs_stack.pop().?;
-        const is_visited = try visited.getOrPut(cur_ast);
-        if (is_visited.found_existing) {
-            continue;
-        }
+fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), statics: *std.ArrayList(u8), alloc: std.mem.Allocator) !void {
+    switch (ast.val) {
+        .num => |n| {
+            try opcode_list.append(alloc, OpCode{ .instr = .Push });
+            try opcode_list.append(alloc, OpCode{ .int = Int.init(n) });
+        },
+        .float => {
+            // Not yet implemented
+            unreachable;
+        },
+        .boolean => |b| {
+            try opcode_list.append(alloc, OpCode{ .instr = .Push });
+            try opcode_list.append(alloc, OpCode{ .boolean = Boolean.init(b) });
+        },
+        .char => |c| {
+            try opcode_list.append(alloc, OpCode{ .instr = .Push });
+            try opcode_list.append(alloc, OpCode{ .char = Char.init(c) });
+        },
+        .str => {
+            // Not yet implemented
+            unreachable;
+        },
+        .binding => |binding| {
+            std.debug.print("BINDING: {s}\n", .{binding});
+            try statics.append(alloc, @truncate(binding.len));
+            const binding_ind = statics.items.len;
+            for (binding) |c| {
+                try statics.append(alloc, c);
+            }
+            try opcode_list.append(alloc, OpCode{ .instr = .Eval });
+            try opcode_list.append(alloc, OpCode{ .binding = &statics.items[binding_ind .. binding_ind + binding.len] });
+        },
+        .children => |children| {
+            if (children.items.len == 0) {
+                return;
+            }
 
-        switch (cur_ast.val) {
-            .num => |n| {
-                try opcode_list.append(alloc, OpCode{ .instr = .Push });
-                try opcode_list.append(alloc, OpCode{ .int = Int.init(n) });
-            },
-            .float => {
-                // Since there is no float tagging yet, I can't quite implement this yet
-                unreachable;
-            },
-            .boolean => |b| {
-                try opcode_list.append(alloc, OpCode{ .instr = .Push });
-                try opcode_list.append(alloc, OpCode{ .boolean = Boolean.init(b) });
-            },
-            .char => {
-                try opcode_list.append(alloc, OpCode{ .instr = .Push });
-                try opcode_list.append(alloc, OpCode{ .char = Char.init(cur_ast.val.char) });
-            },
-            .str => {
-                // There is also no string parsing yet because they're heap-allocated (future work)
-                unreachable;
-            },
-            .binding => |binding| {
-                try statics.append(alloc, @truncate(binding.len));
-                const binding_ind = statics.items.len;
-                for (binding) |c| {
-                    try statics.append(alloc, c);
-                }
-                try opcode_list.append(alloc, OpCode{ .instr = .Eval });
-                try opcode_list.append(alloc, OpCode{ .binding = &statics.items[binding_ind .. binding_ind + binding.len] });
-            },
-            .children => |children| {
-                if (children.items.len == 0) {
-                    break;
-                }
-
-                const operation = children.items[0];
-                // Specific function checking
-                if (operation.val == .binding) {
+            switch (children.items[0].val) {
+                .binding => {
                     const binding = children.items[0].val.binding;
                     if (std.mem.eql(u8, binding, "if")) {
-                        // If
+                        if (children.items.len != 3) {
+                            // TODO: better error  handling
+                            std.debug.print("ERROR: malformed if\n", .{});
+                        }
+                        // Handle `if`
+                        try compile_rec(&children.items[0], opcode_list, statics, alloc);
+
+                        try opcode_list.append(alloc, OpCode{ .instr = .Jump });
+                        const cond_target_ind = opcode_list.items.len; // The index of the conditional jump target
+                        try opcode_list.append(alloc, OpCode{ .codepoint = undefined });
+
+                        // First arm
+                        try compile_rec(&children.items[1], opcode_list, statics, alloc);
+
+                        // Unconditional jump to end of second arm
+                        // Pushing True: no need for unconditional jump instruction
+                        try opcode_list.append(alloc, OpCode{ .instr = .Push });
+                        try opcode_list.append(alloc, OpCode{ .boolean = Boolean.init(true) });
+                        try opcode_list.append(alloc, OpCode{ .codepoint = undefined });
+
+                        // Beginning of second arm = target of cond false
+                        const second_arm_ind = opcode_list.items.len;
+                        opcode_list.items[cond_target_ind] = OpCode{ .codepoint = second_arm_ind };
+
+                        // Run second arm
+                        try compile_rec(&children.items[2], opcode_list, statics, alloc);
+                        // End of second arm = target of unconditional jump
+                        const end_ind = opcode_list.items.len;
+                        opcode_list.items[second_arm_ind - 1] = OpCode{ .codepoint = end_ind };
                     } else if (std.mem.eql(u8, binding, "let")) {
                         // The first argument to let should be a list of bindings
                         if (children.items[1].val != .children) {
-                            // TODO: better error message
-                            // Also, return error{} doesn't work(?)
-                            // return error{};
+                            // TODO: better error handling
+                            std.debug.print("ERROR: malformed let\n", .{});
                         }
 
-                        var expr_i = children.items.len - 1;
-                        while (expr_i > 1) {
-                            // Don't recurse on the first argument (bindings list)
-                            const expr = &children.items[expr_i];
-                            try dfs_stack.append(alloc, expr);
-                            expr_i -= 1;
+                        for (children.items) |child| {
+                            try compile_rec(&child, opcode_list, statics, alloc);
+                        }
+                    } else {
+                        // Not a reserved function name
+                        for (children.items[1..]) |child| {
+                            try compile_rec(&child, opcode_list, statics, alloc);
                         }
 
-                        const bindings = children.items[1].val.children.items;
-                        var bindings_i = bindings.len - 1;
-                        while (bindings_i >= 0) {
-                            // Recurse on all the binding children
-                            const child = &bindings[bindings_i];
-                            try dfs_stack.append(alloc, child);
-                            bindings_i -= 1;
+                        try statics.append(alloc, @truncate(binding.len));
+                        const binding_ind = statics.items.len;
+                        for (binding) |c| {
+                            try statics.append(alloc, c);
                         }
+                        try opcode_list.append(alloc, OpCode{ .instr = .Eval });
+                        try opcode_list.append(alloc, OpCode{ .binding = &statics.items[binding_ind .. binding_ind + binding.len] });
                     }
-
-                    // Evaluate the result of the operation on the operands once the operands are all evaluated
-                    try statics.append(alloc, @truncate(binding.len));
-                    const binding_ind = statics.items.len;
-                    for (binding) |c| {
-                        try statics.append(alloc, c);
+                },
+                else => {
+                    // Not a binding
+                    for (children.items) |child| {
+                        try compile_rec(&child, opcode_list, statics, alloc);
                     }
-                    try opcode_list.append(alloc, OpCode{ .instr = .Eval });
-                    try opcode_list.append(alloc, OpCode{ .binding = &statics.items[binding_ind .. binding_ind + binding.len] });
-                }
-
-                // Operation
-                try dfs_stack.append(alloc, &operation);
-
-                // Operands
-                var i = children.items.len - 1;
-                while (i > 0) {
-                    const child = &children.items[i];
-                    try dfs_stack.append(alloc, child);
-                    i -= 1;
-                }
-            },
-        }
+                },
+            }
+        },
     }
-
-    try opcode_list.append(alloc, OpCode{ .instr = .Return });
-    const code = try opcode_list.toOwnedSlice(alloc);
-
-    return CompileOutput{
-        .code = code,
-        .statics = try statics.toOwnedSlice(alloc),
-    };
-    // return opcode_list;
 }
 
 test "expr +" {
@@ -276,7 +279,21 @@ test "expr +" {
     var compile_output = try compile(&ast, alloc);
     defer compile_output.deinit(alloc);
     const opcodes = compile_output.code;
-    std.debug.print("BINDING: {s}\n", .{opcodes[1].binding.*});
+    // std.debug.print("BINDING: {s}\n", .{opcodes[1].binding.*});
+    for (opcodes) |op| {
+        op.print();
+    }
+}
+
+test "let" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(let ((a 3)) a)";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const opcodes = compile_output.code;
+    // std.debug.print("BINDING: {s}\n", .{opcodes[1].binding.*});
     for (opcodes) |op| {
         op.print();
     }

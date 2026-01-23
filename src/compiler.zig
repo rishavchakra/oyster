@@ -185,22 +185,55 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
             .children => {
                 const num_children = cur_ast.val.children.items.len;
 
-                if (num_children > 0) {
-                    // Operation
-                    try dfs_stack.append(alloc, &cur_ast.val.children.items[0]);
-
-                    // Operands
-                    var i = num_children - 1;
-                    while (i > 0) {
-                        const child = &cur_ast.val.children.items[i];
-                        try dfs_stack.append(alloc, child);
-                        i -= 1;
-                    }
-
-                    // Evaluate the result of the operation on the operands once the operands are all evaluated
-                    try opcode_list.append(alloc, OpCode{ .instr = .Eval });
-                    try opcode_list.append(alloc, OpCode{ .binding = cur_ast.val.children.items[0].val.binding.ptr });
+                if (num_children == 0) {
+                    break;
                 }
+
+                // Specific function checking
+                if (cur_ast.val.children.items[0].val == .binding) {
+                    const binding = cur_ast.val.children.items[0].val.binding;
+                    if (std.mem.eql(u8, binding, "if")) {
+                        // If
+                    } else if (std.mem.eql(u8, binding, "let")) {
+                        // The first argument to let should be a list of bindings
+                        if (cur_ast.val.children.items[1].val != .children) {
+                            // TODO: better error message
+                            return error{};
+                        }
+
+                        var expr_i = cur_ast.val.children.items.len - 1;
+                        while (expr_i > 1) {
+                            // Don't recurse on the first argument (bindings list)
+                            const expr = &cur_ast.val.children.items[expr_i];
+                            try dfs_stack.append(alloc, expr);
+                            expr_i -= 1;
+                        }
+
+                        const bindings = cur_ast.val.children.items[1].val.children.items;
+                        var bindings_i = bindings.len - 1;
+                        while (bindings_i >= 0) {
+                            // Recurse on all the binding children
+                            const child = &bindings[bindings_i];
+                            try dfs_stack.append(alloc, child);
+                            bindings_i -= 1;
+                        }
+                    }
+                }
+
+                // Operation
+                try dfs_stack.append(alloc, &cur_ast.val.children.items[0]);
+
+                // Operands
+                var i = num_children - 1;
+                while (i > 0) {
+                    const child = &cur_ast.val.children.items[i];
+                    try dfs_stack.append(alloc, child);
+                    i -= 1;
+                }
+
+                // Evaluate the result of the operation on the operands once the operands are all evaluated
+                try opcode_list.append(alloc, OpCode{ .instr = .Eval });
+                try opcode_list.append(alloc, OpCode{ .binding = cur_ast.val.children.items[0].val.binding.ptr });
             },
         }
     }
@@ -214,3 +247,9 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
     };
     // return opcode_list;
 }
+
+test "let" {}
+
+test "define" {}
+
+test "if" {}

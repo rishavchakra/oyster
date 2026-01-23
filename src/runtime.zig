@@ -1,22 +1,16 @@
 const std = @import("std");
 const compiler = @import("compiler.zig");
 
-// pub const Runtime = struct {
-//     const Self = @This();
-//     pub const FuncPtrList = std.ArrayList((fn (*Self) void));
-//     pub const FuncPtrMap = std.StringHashMap(FuncPtrList);
-//     pub const Stack = std.ArrayList(u8);
-//
-//     stack: Stack,
-//     func_ptrs: std.StringHashMap(FuncPtrList),
-//     alloc: std.mem.Allocator,
-//     pc: usize,
-// };
-
-// pub const Runtime = struct {};
-
-const native_funcs = [_]NativeFunc{
-    native_if,
+const funcs = [_]Func{
+    native_add1,
+    native_sub1,
+    native_atoi,
+    native_itoa,
+    native_is_null,
+    native_is_int,
+    native_is_bool,
+    native_is_zero,
+    native_not,
 };
 
 const Stack = std.ArrayList(u64);
@@ -28,7 +22,7 @@ const Binding = union(enum) {
 const BindingList = std.ArrayList(u64);
 const BindingMap = std.AutoHashMap([*]const u8, BindingList);
 const BindingLifetimes = std.ArrayList(std.StringHashMap(void));
-const NativeFunc = fn (*Stack, *BindingMap, *BindingLifetimes, std.mem.Allocator) anyerror!void;
+const Func = fn (*Stack, *BindingMap, *BindingLifetimes, std.mem.Allocator) anyerror!void;
 
 pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !i64 {
     var pc: usize = 0;
@@ -65,19 +59,9 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !i6
     return 0;
 }
 
-fn native_if(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
-    _ = binding_map;
-    _ = lifetimes;
-    const cond = compiler.OpCode{ .raw = try stack.pop() };
-    const is_false = cond.type_of() == .boolean and cond.boolean.val == false;
-    const arm1 = try stack.pop();
-    const arm2 = try stack.pop();
-    if (!is_false) {
-        stack.append(compiler.OpCode{ .raw = arm1 }, alloc);
-    } else {
-        stack.append(compiler.OpCode{ .raw = arm2 }, alloc);
-    }
-}
+//================ Native Functions ================
+
+fn native_let(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
 
 fn native_add1(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
     _ = binding_map;
@@ -88,3 +72,27 @@ fn native_add1(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifet
     }
     stack.append(compiler.OpCode{ .int = compiler.Int.init(arg.int.val + 1) }, alloc);
 }
+
+fn native_sub1(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
+    _ = binding_map;
+    _ = lifetimes;
+    const arg = compiler.OpCode{try stack.pop()};
+    if (arg.type_of() != .int) {
+        return error{};
+    }
+    stack.append(compiler.OpCode{ .int = compiler.Int.init(arg.int.val - 1) }, alloc);
+}
+
+fn native_atoi(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+
+fn native_itoa(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+
+fn native_is_null(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+
+fn native_is_zero(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+
+fn native_is_int(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+
+fn native_is_bool(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+
+fn native_not(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}

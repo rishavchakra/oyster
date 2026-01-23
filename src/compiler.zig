@@ -2,10 +2,10 @@ const std = @import("std");
 const parser = @import("parser.zig");
 
 pub const Instr = enum(u64) {
-    Push, // LOAD64
-    Pop,
-    Eval,
-    Return,
+    Push = 0b00_0011_1111, // LOAD64
+    Pop = 0b01_0011_1111,
+    Eval = 0b10_0011_1111,
+    Return = 0b11_0011_1111,
 };
 
 pub const Int = packed struct {
@@ -24,11 +24,11 @@ pub const Int = packed struct {
 
 pub const Boolean = packed struct {
     tag: u7,
-    val: u1,
+    val: bool,
     pub fn init(val: bool) Boolean {
         return Boolean{
             .tag = 0b001_1111,
-            .val = @intFromBool(val),
+            .val = val,
         };
     }
 };
@@ -71,9 +71,9 @@ pub const OpCode = packed union {
     float: Float,
     /// Bindings are not interpreted in the same way as other opcodes
     /// because they are string pointers which may step on opcode tags
-    binding: [*]const u8,
+    binding: *const []const u8,
 
-    pub fn type_of(self: OpCode) !OpCodeType {
+    pub fn type_of(self: OpCode) OpCodeType {
         // Read from the tags to get the true value and type of the opcode
         const as_int = self.int;
         if (as_int.tag == 0b00) {
@@ -88,38 +88,41 @@ pub const OpCode = packed union {
             return .char;
         }
         // Instruction parsing: what are the values we use?
-        // if (self.raw >= X and self.raw <= Y) {
-        //     const as_instr = self.instr;
-        // }
-
-        return error{};
+        if (self.raw & 0b1111_1111 == 0b0011_1111) {
+            // const as_instr = self.instr;
+            return .instr;
+        }
+        return .raw;
     }
 
     pub fn print(self: OpCode) void {
         const op = type_of(self);
         std.debug.print("{s}:\t", .{@tagName(op)});
         switch (op) {
-            .binding => |binding| {
-                std.debug.print("{s}\n", .{binding});
+            .binding => {
+                std.debug.print("{s}\n", .{self.binding.*});
             },
-            .instr => |instr| {
-                std.debug.print("{s}\n", .{@tagName(instr)});
+            .instr => {
+                std.debug.print("{s}\n", .{@tagName(self.instr)});
             },
-            .int => |i| {
-                std.debug.print("\t{d}\n", .{i});
+            .int => {
+                std.debug.print("\t{d}\n", .{self.int.val});
             },
-            .boolean => |b| {
-                if (b) {
+            .float => {
+                std.debug.print("\t{d}\n", .{self.float.val});
+            },
+            .char => {
+                std.debug.print("\t{d}\n", .{self.char.val});
+            },
+            .raw => {
+                std.debug.print("\t{d}\n", .{self.raw});
+            },
+            .boolean => {
+                if (self.boolean.val) {
                     std.debug.print("T\n", .{});
                 } else {
                     std.debug.print("F\n", .{});
                 }
-            },
-            .char => |c| {
-                std.debug.print("\t{d}\n", .{c});
-            },
-            .float => |f| {
-                std.debug.print("\t{d}\n", .{f});
             },
         }
     }
@@ -134,11 +137,17 @@ pub const OpCodeType = enum {
     boolean,
     char,
     float,
+    raw,
 };
 
 pub const CompileOutput = struct {
-    statics: []const u8,
+    statics: []u8,
     code: []OpCode,
+
+    pub fn deinit(self: *CompileOutput, alloc: std.mem.Allocator) void {
+        alloc.free(self.statics);
+        alloc.free(self.code);
+    }
 };
 
 pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput {
@@ -146,6 +155,7 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
     var dfs_stack: std.ArrayList(*const parser.AST) = try .initCapacity(alloc, 16);
     defer visited.deinit();
     defer dfs_stack.deinit(alloc);
+    var statics: std.ArrayList(u8) = try .initCapacity(alloc, 64);
 
     var opcode_list: std.ArrayList(OpCode) = try .initCapacity(alloc, 16);
 
@@ -158,17 +168,17 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
         }
 
         switch (cur_ast.val) {
-            .num => {
+            .num => |n| {
                 try opcode_list.append(alloc, OpCode{ .instr = .Push });
-                try opcode_list.append(alloc, OpCode{ .int = Int.init(cur_ast.val.num) });
+                try opcode_list.append(alloc, OpCode{ .int = Int.init(n) });
             },
             .float => {
                 // Since there is no float tagging yet, I can't quite implement this yet
                 unreachable;
             },
-            .boolean => {
+            .boolean => |b| {
                 try opcode_list.append(alloc, OpCode{ .instr = .Push });
-                try opcode_list.append(alloc, OpCode{ .boolean = Boolean.init(cur_ast.val.boolean) });
+                try opcode_list.append(alloc, OpCode{ .boolean = Boolean.init(b) });
             },
             .char => {
                 try opcode_list.append(alloc, OpCode{ .instr = .Push });
@@ -178,38 +188,43 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
                 // There is also no string parsing yet because they're heap-allocated (future work)
                 unreachable;
             },
-            .binding => {
+            .binding => |binding| {
+                try statics.append(alloc, @truncate(binding.len));
+                const binding_ind = statics.items.len;
+                for (binding) |c| {
+                    try statics.append(alloc, c);
+                }
                 try opcode_list.append(alloc, OpCode{ .instr = .Eval });
-                try opcode_list.append(alloc, OpCode{ .binding = cur_ast.val.children.items[0].val.binding.ptr });
+                try opcode_list.append(alloc, OpCode{ .binding = &statics.items[binding_ind .. binding_ind + binding.len] });
             },
-            .children => {
-                const num_children = cur_ast.val.children.items.len;
-
-                if (num_children == 0) {
+            .children => |children| {
+                if (children.items.len == 0) {
                     break;
                 }
 
+                const operation = children.items[0];
                 // Specific function checking
-                if (cur_ast.val.children.items[0].val == .binding) {
-                    const binding = cur_ast.val.children.items[0].val.binding;
+                if (operation.val == .binding) {
+                    const binding = children.items[0].val.binding;
                     if (std.mem.eql(u8, binding, "if")) {
                         // If
                     } else if (std.mem.eql(u8, binding, "let")) {
                         // The first argument to let should be a list of bindings
-                        if (cur_ast.val.children.items[1].val != .children) {
+                        if (children.items[1].val != .children) {
                             // TODO: better error message
-                            return error{};
+                            // Also, return error{} doesn't work(?)
+                            // return error{};
                         }
 
-                        var expr_i = cur_ast.val.children.items.len - 1;
+                        var expr_i = children.items.len - 1;
                         while (expr_i > 1) {
                             // Don't recurse on the first argument (bindings list)
-                            const expr = &cur_ast.val.children.items[expr_i];
+                            const expr = &children.items[expr_i];
                             try dfs_stack.append(alloc, expr);
                             expr_i -= 1;
                         }
 
-                        const bindings = cur_ast.val.children.items[1].val.children.items;
+                        const bindings = children.items[1].val.children.items;
                         var bindings_i = bindings.len - 1;
                         while (bindings_i >= 0) {
                             // Recurse on all the binding children
@@ -218,22 +233,27 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
                             bindings_i -= 1;
                         }
                     }
+
+                    // Evaluate the result of the operation on the operands once the operands are all evaluated
+                    try statics.append(alloc, @truncate(binding.len));
+                    const binding_ind = statics.items.len;
+                    for (binding) |c| {
+                        try statics.append(alloc, c);
+                    }
+                    try opcode_list.append(alloc, OpCode{ .instr = .Eval });
+                    try opcode_list.append(alloc, OpCode{ .binding = &statics.items[binding_ind .. binding_ind + binding.len] });
                 }
 
                 // Operation
-                try dfs_stack.append(alloc, &cur_ast.val.children.items[0]);
+                try dfs_stack.append(alloc, &operation);
 
                 // Operands
-                var i = num_children - 1;
+                var i = children.items.len - 1;
                 while (i > 0) {
-                    const child = &cur_ast.val.children.items[i];
+                    const child = &children.items[i];
                     try dfs_stack.append(alloc, child);
                     i -= 1;
                 }
-
-                // Evaluate the result of the operation on the operands once the operands are all evaluated
-                try opcode_list.append(alloc, OpCode{ .instr = .Eval });
-                try opcode_list.append(alloc, OpCode{ .binding = cur_ast.val.children.items[0].val.binding.ptr });
             },
         }
     }
@@ -243,12 +263,24 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
 
     return CompileOutput{
         .code = code,
-        .statics = "",
+        .statics = try statics.toOwnedSlice(alloc),
     };
     // return opcode_list;
 }
 
-test "let" {}
+test "expr +" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(+ 1 2)";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const opcodes = compile_output.code;
+    std.debug.print("BINDING: {s}\n", .{opcodes[1].binding.*});
+    for (opcodes) |op| {
+        op.print();
+    }
+}
 
 test "define" {}
 

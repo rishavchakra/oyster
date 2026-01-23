@@ -38,7 +38,6 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !i6
         .instr => |instr| {
             switch (instr) {
                 .Push => {
-                    // LOAD [value]
                     _ = opcodes[pc + 1].type_of() catch |err| return err;
                     stack.append(alloc, opcodes[pc + 1].raw);
                     pc += 2;
@@ -46,9 +45,29 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !i6
                 .Eval => {
                     // Evaluate the following binding
                     // and apply it to the stack operands
+                    // Check it against the mapping
+                    // and based on the location figure out which area to look
+                },
+                .Jump => {
+                    const cond = compiler.OpCode{ .raw = stack.pop().? };
+                    const target = opcodes[pc + 1].codepoint;
+                    if (cond.type_of() == .boolean and !cond.boolean.val) {
+                        // Take the jump (second arm) if false
+                        continue :run opcodes[target];
+                    } else {
+                        continue :run opcodes[pc + 2];
+                    }
+                },
+                .Squash => {
+                    const num_squash = opcodes[pc + 1].raw;
+                    const res = stack.pop().?;
+                    for (0..num_squash) |_| {
+                        _ = stack.pop().?;
+                    }
+                    try stack.append(alloc, res);
                 },
                 .Return => {
-                    const ret = try stack.pop();
+                    const ret = stack.pop().?;
                     _ = ret;
                     break :run;
                 },
@@ -61,7 +80,12 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !i6
 
 //================ Native Functions ================
 
-fn native_let(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+fn native_let(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
+    _ = stack;
+    _ = binding_map;
+    _ = lifetimes;
+    _ = alloc;
+}
 
 fn native_add1(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
     _ = binding_map;
@@ -83,16 +107,51 @@ fn native_sub1(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifet
     stack.append(compiler.OpCode{ .int = compiler.Int.init(arg.int.val - 1) }, alloc);
 }
 
-fn native_atoi(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+fn native_atoi(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
+    _ = stack;
+    _ = binding_map;
+    _ = lifetimes;
+    _ = alloc;
+}
 
-fn native_itoa(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+fn native_itoa(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
+    _ = stack;
+    _ = binding_map;
+    _ = lifetimes;
+    _ = alloc;
+}
 
-fn native_is_null(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+fn native_is_null(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
+    _ = stack;
+    _ = binding_map;
+    _ = lifetimes;
+    _ = alloc;
+}
 
-fn native_is_zero(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+fn native_is_zero(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
+    _ = stack;
+    _ = binding_map;
+    _ = lifetimes;
+    _ = alloc;
+}
 
-fn native_is_int(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+fn native_is_int(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
+    _ = stack;
+    _ = binding_map;
+    _ = lifetimes;
+    _ = alloc;
+}
 
-fn native_is_bool(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+fn native_is_bool(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
+    _ = stack;
+    _ = binding_map;
+    _ = lifetimes;
+    _ = alloc;
+}
 
-fn native_not(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {}
+fn native_not(stack: *Stack, binding_map: *BindingMap, lifetimes: *BindingLifetimes, alloc: std.mem.Allocator) !void {
+    _ = stack;
+    _ = binding_map;
+    _ = lifetimes;
+    _ = alloc;
+}

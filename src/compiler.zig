@@ -5,7 +5,8 @@ pub const Instr = enum(u64) {
     Push = 0b00_0011_1111, // LOAD64
     Jump = 0b01_0011_1111,
     Eval = 0b10_0011_1111,
-    Return = 0b11_0011_1111,
+    Squash = 0b11_0011_1111,
+    Return = 0b100_0011_1111,
 };
 
 pub const Int = packed struct {
@@ -234,14 +235,19 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
                         const end_ind = opcode_list.items.len;
                         opcode_list.items[second_arm_ind - 1] = OpCode{ .codepoint = end_ind };
                     } else if (std.mem.eql(u8, binding, "let")) {
-                        // The first argument to let should be a list of bindings
-                        if (children.items[1].val != .children) {
-                            // TODO: better error handling
-                            std.debug.print("ERROR: malformed let\n", .{});
-                        }
+                        switch (children.items[1].val) {
+                            .children => {
+                                for (children.items) |child| {
+                                    try compile_rec(&child, opcode_list, statics, alloc);
+                                }
 
-                        for (children.items) |child| {
-                            try compile_rec(&child, opcode_list, statics, alloc);
+                                // The number of bindings that need to be freed
+                                const num_bindings = children.items[1].val.children.items.len;
+                                try opcode_list.append(alloc, OpCode{ .instr = .Squash });
+                                try opcode_list.append(alloc, OpCode{ .raw = num_bindings });
+                            },
+                            // The first argument to let should be a list of bindings
+                            else => std.debug.print("ERROR: malformed let\n", .{}),
                         }
                     } else {
                         // Not a reserved function name

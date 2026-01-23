@@ -186,7 +186,6 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
             unreachable;
         },
         .binding => |binding| {
-            std.debug.print("BINDING: {s}\n", .{binding});
             try statics.append(alloc, @truncate(binding.len));
             const binding_ind = statics.items.len;
             for (binding) |c| {
@@ -270,6 +269,7 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
 }
 
 test "basic" {
+    std.debug.print("========\nTEST: basic\n", .{});
     const alloc = std.testing.allocator;
     const text: [:0]const u8 = "(+ 1 2)";
     var ast = try parser.scheme_parse(text, alloc);
@@ -283,6 +283,7 @@ test "basic" {
 }
 
 test "nested" {
+    std.debug.print("========\nTEST: nested\n", .{});
     const alloc = std.testing.allocator;
     const text: [:0]const u8 = "(+ (* 3 4) 5)";
     var ast = try parser.scheme_parse(text, alloc);
@@ -296,6 +297,7 @@ test "nested" {
 }
 
 test "let" {
+    std.debug.print("========\nTEST: let\n", .{});
     const alloc = std.testing.allocator;
     const text: [:0]const u8 = "(let ((a 3)) a)";
     var ast = try parser.scheme_parse(text, alloc);
@@ -309,6 +311,7 @@ test "let" {
 }
 
 test "if" {
+    std.debug.print("========\nTEST: if\n", .{});
     const alloc = std.testing.allocator;
     const text: [:0]const u8 = "(if 1 2 3)";
     var ast = try parser.scheme_parse(text, alloc);
@@ -321,4 +324,16 @@ test "if" {
     }
 }
 
-test "define" {}
+test "add1" {
+    std.debug.print("========\nTEST: add1\n", .{});
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(add1 2)";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const opcodes = compile_output.code;
+    for (opcodes) |op| {
+        op.print();
+    }
+}

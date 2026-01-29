@@ -2,35 +2,28 @@ const std = @import("std");
 const compiler = @import("compiler.zig");
 const parser = @import("parser.zig");
 
-const funcs = [_]Func{
-    native_add1,
-    native_sub1,
-    native_atoi,
-    native_itoa,
-    native_is_null,
-    native_is_int,
-    native_is_bool,
-    native_is_zero,
-    native_not,
-};
-
 const Stack = std.ArrayList(compiler.OpCode);
 const Binding = union(enum) {
-    reserved: u32,
-    native: u32,
-    static: u32,
-    stack: u32,
+    reserved: Func,
+    native: Func,
+    static: usize,
+    stack: usize,
 };
 const BindingList = std.ArrayList(Binding);
-const BindingMap = std.AutoHashMap([*]const u8, BindingList);
+const BindingMap = std.AutoHashMap([*:0]u8, BindingList);
 const BindingLifetimes = std.ArrayList(std.StringHashMap(void));
-const Func = fn (*Stack, *BindingMap, std.mem.Allocator) anyerror!void;
+const Func = *const fn (*Stack, *BindingMap, std.mem.Allocator) anyerror!void;
 
 pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u64 {
-    var pc: usize = 0;
-    var stack: Stack = try .initCapacity(alloc, 64);
-    const bindings: BindingMap = .init(alloc);
     const opcodes = bytecode.code;
+    var pc: usize = 0;
+
+    var stack: Stack = try .initCapacity(alloc, 64);
+    defer stack.deinit(alloc);
+
+    var bindings: BindingMap = .init(alloc);
+    try init_bindings(&bindings, alloc);
+    defer deinit_bindings(&bindings, alloc);
 
     run: while (true) {
         const optype = opcodes[pc].type_of();
@@ -43,23 +36,31 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
                         pc += 2;
                     },
                     .Eval => {
-                        const binding_name = opcodes[pc + 1].binding;
-                        const val_list = bindings.get(binding_name.*.ptr);
+                        const binding_ind = opcodes[pc + 1].binding;
+                        const binding_name: [:0]u8 = @ptrCast(&bytecode.statics[binding_ind]);
+                        std.debug.print("Fetching binding: \"{any}\"\n", .{binding_name});
+                        const val_list = bindings.get(binding_name);
                         if (val_list == null) {
-                            std.debug.print("UNBOUND BINDING: {s}\n", .{binding_name.*});
+                            std.debug.print("UNBOUND BINDING: \"{s}\"\n", .{binding_name});
                             break :run;
                         }
                         const binding = val_list.?.getLast();
                         switch (binding) {
                             .stack => |ind| try stack.append(alloc, stack.items[ind]),
-                            .native => |ind| try funcs[ind](&stack, &bindings, alloc),
+                            .native => |fptr| {
+                                // const func = native_funcs[ind];
+                                try fptr(&stack, &bindings, alloc);
+                            },
+                            .reserved => |fptr| {
+                                // const func = reserved_funcs[ind];
+                                try fptr(&stack, &bindings, alloc);
+                            },
                             .static => unreachable,
                             // unreachable for now,
                             // this is for things like string constants
                         }
                     },
                     .Jump => {
-                        // const cond = compiler.OpCode{ .raw = stack.pop().? };
                         const cond = stack.pop().?;
                         const target = opcodes[pc + 1].codepoint;
                         if (cond.type_of() == .boolean and !cond.boolean.val) {
@@ -86,7 +87,7 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
                     },
                     .Return => {
                         const ret = stack.pop().?;
-                        return ret;
+                        return ret.raw;
                     },
                 }
             },
@@ -97,6 +98,78 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
     }
 
     return 0;
+}
+
+pub fn init_bindings(bindings: *BindingMap, alloc: std.mem.Allocator) !void {
+    const inc_name: [*:0]const u8 = "inc";
+    var inc_bindings = try BindingList.initCapacity(alloc, 1);
+    // var dec_bindings = try BindingList.initCapacity(alloc, 1);
+    // var atoi_bindings = try BindingList.initCapacity(alloc, 1);
+    // var itoa_bindings = try BindingList.initCapacity(alloc, 1);
+    // var is_null_bindings = try BindingList.initCapacity(alloc, 1);
+    // var is_int_bindings = try BindingList.initCapacity(alloc, 1);
+    // var is_bool_bindings = try BindingList.initCapacity(alloc, 1);
+    // var is_zero_bindings = try BindingList.initCapacity(alloc, 1);
+    // var not_bindings = try BindingList.initCapacity(alloc, 1);
+
+    try inc_bindings.append(alloc, Binding{ .native = &native_inc });
+    // try dec_bindings.append(alloc, Binding{ .native = &native_dec });
+    // try atoi_bindings.append(alloc, Binding{ .native = &native_atoi });
+    // try itoa_bindings.append(alloc, Binding{ .native = &native_itoa });
+    // try is_null_bindings.append(alloc, Binding{ .native = &native_is_null });
+    // try is_int_bindings.append(alloc, Binding{ .native = &native_is_int });
+    // try is_bool_bindings.append(alloc, Binding{ .native = &native_is_bool });
+    // try is_zero_bindings.append(alloc, Binding{ .native = &native_is_zero });
+    // try not_bindings.append(alloc, Binding{ .native = &native_not });
+
+    try bindings.put(@constCast(inc_name), inc_bindings);
+    // try bindings.put("dec", dec_bindings);
+    // try bindings.put("atoi", atoi_bindings);
+    // try bindings.put("itoa", itoa_bindings);
+    // try bindings.put("is_null", is_null_bindings);
+    // try bindings.put("is_int", is_int_bindings);
+    // try bindings.put("is_bool", is_bool_bindings);
+    // try bindings.put("is_zero", is_zero_bindings);
+    // try bindings.put("not", not_bindings);
+}
+
+pub fn init_bindings_old(bindings: *BindingMap, alloc: std.mem.Allocator) !void {
+    var inc_bindings = try BindingList.initCapacity(alloc, 1);
+    var dec_bindings = try BindingList.initCapacity(alloc, 1);
+    var atoi_bindings = try BindingList.initCapacity(alloc, 1);
+    var itoa_bindings = try BindingList.initCapacity(alloc, 1);
+    var is_null_bindings = try BindingList.initCapacity(alloc, 1);
+    var is_int_bindings = try BindingList.initCapacity(alloc, 1);
+    var is_bool_bindings = try BindingList.initCapacity(alloc, 1);
+    var is_zero_bindings = try BindingList.initCapacity(alloc, 1);
+    var not_bindings = try BindingList.initCapacity(alloc, 1);
+
+    try inc_bindings.append(alloc, Binding{ .native = 0 });
+    try dec_bindings.append(alloc, Binding{ .native = 1 });
+    try atoi_bindings.append(alloc, Binding{ .native = 2 });
+    try itoa_bindings.append(alloc, Binding{ .native = 3 });
+    try is_null_bindings.append(alloc, Binding{ .native = 4 });
+    try is_int_bindings.append(alloc, Binding{ .native = 5 });
+    try is_bool_bindings.append(alloc, Binding{ .native = 6 });
+    try is_zero_bindings.append(alloc, Binding{ .native = 7 });
+    try not_bindings.append(alloc, Binding{ .native = 8 });
+
+    try bindings.put("inc", inc_bindings);
+    try bindings.put("dec", dec_bindings);
+    try bindings.put("atoi", atoi_bindings);
+    try bindings.put("itoa", itoa_bindings);
+    try bindings.put("is_null", is_null_bindings);
+    try bindings.put("is_int", is_int_bindings);
+    try bindings.put("is_bool", is_bool_bindings);
+    try bindings.put("is_zero", is_zero_bindings);
+    try bindings.put("not", not_bindings);
+}
+
+pub fn deinit_bindings(bindings: *BindingMap, alloc: std.mem.Allocator) void {
+    var binding_lists = bindings.iterator();
+    while (binding_lists.next()) |ls| {
+        ls.value_ptr.deinit(alloc);
+    }
 }
 
 //================ Native Functions ================
@@ -115,7 +188,7 @@ fn native_let(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator)
     // (but I think it would be funny if I had as few opcodes as possible)
 }
 
-fn native_add1(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
+fn native_inc(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
     const arg = stack.pop().?;
     if (arg.type_of() != .int) {
@@ -124,7 +197,7 @@ fn native_add1(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator
     try stack.append(alloc, compiler.OpCode{ .int = compiler.Int.init(arg.int.val + 1) });
 }
 
-fn native_sub1(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
+fn native_dec(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
     const arg = stack.pop().?;
     if (arg.type_of() != .int) {
@@ -148,7 +221,8 @@ fn native_itoa(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator
     const arg = stack.pop().?;
     const arg_type = arg.type_of();
     if (arg_type == .int) {
-        try stack.append(alloc, compiler.OpCode{ .char = compiler.Char.init(@truncate(arg.int.val)) });
+        const pos_val = @abs(arg.int.val);
+        try stack.append(alloc, compiler.OpCode{ .char = compiler.Char.init(@truncate(pos_val)) });
     }
     // TODO: handle typeerror case
 }
@@ -163,7 +237,7 @@ fn native_is_null(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Alloca
 
 fn native_is_zero(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
-    const arg = stack.pop();
+    const arg = stack.pop().?;
     const arg_type = arg.type_of();
     const is_zero = switch (arg_type) {
         .int => arg.int.val == 0,
@@ -178,30 +252,30 @@ fn native_is_zero(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Alloca
 
 fn native_is_int(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
-    const arg = stack.pop();
+    const arg = stack.pop().?;
     const arg_type = arg.type_of();
     try stack.append(alloc, compiler.OpCode{ .boolean = compiler.Boolean.init(arg_type == .int) });
 }
 
 fn native_is_bool(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
-    const arg = compiler.OpCode{ .raw = try stack.pop() };
+    const arg = stack.pop().?;
     const arg_type = arg.type_of();
     try stack.append(alloc, compiler.OpCode{ .boolean = compiler.Boolean.init(arg_type == .boolean) });
 }
 
 fn native_not(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
-    const arg = compiler.OpCode{ .raw = try stack.pop() };
+    const arg = stack.pop().?;
     const arg_type = arg.type_of();
     if (arg_type == .boolean) {
         try stack.append(alloc, compiler.OpCode{ .boolean = compiler.Boolean.init(!arg.boolean.val) });
     }
 }
 
-test native_add1 {
+test native_inc {
     const alloc = std.testing.allocator;
-    const text: [:0]const u8 = "(add1 2)";
+    const text: [:0]const u8 = "(inc 2)";
     var ast = try parser.scheme_parse(text, alloc);
     defer ast.deinit(alloc);
     var compile_output = try compiler.compile(&ast, alloc);

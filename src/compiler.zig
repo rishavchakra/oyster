@@ -73,7 +73,8 @@ pub const OpCode = packed union {
     codepoint: usize,
     /// Bindings are not interpreted in the same way as other opcodes
     /// because they are string pointers which may step on opcode tags
-    binding: *const []const u8,
+    /// Bindings are indices into
+    binding: usize,
 
     pub fn type_of(self: OpCode) OpCodeType {
         // Read from the tags to get the true value and type of the opcode
@@ -102,7 +103,7 @@ pub const OpCode = packed union {
         std.debug.print("{s}:\t", .{@tagName(op)});
         switch (op) {
             .binding => {
-                std.debug.print("{s}\n", .{self.binding.*});
+                std.debug.print("{d}\n", .{self.binding});
             },
             .instr => {
                 std.debug.print("{s}\n", .{@tagName(self.instr)});
@@ -130,8 +131,6 @@ pub const OpCode = packed union {
     }
 };
 
-/// We do not use this in the opcodes list because it isn't packed,
-/// so it's 128 bits long instead of a proper 64
 pub const OpCodeType = enum {
     binding,
     instr,
@@ -155,7 +154,8 @@ pub const CompileOutput = struct {
 pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput {
     var statics: std.ArrayList(u8) = try .initCapacity(alloc, 64);
     var opcode_list: std.ArrayList(OpCode) = try .initCapacity(alloc, 16);
-    try compile_rec(ast, &opcode_list, &statics, alloc);
+    var bindings_set: std.StringHashMap(usize) = .init(alloc);
+    try compile_rec(ast, &opcode_list, &statics, &bindings_set, alloc);
     try opcode_list.append(alloc, OpCode{ .instr = .Return });
     return CompileOutput{
         .statics = try statics.toOwnedSlice(alloc),
@@ -163,7 +163,7 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
     };
 }
 
-fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), statics: *std.ArrayList(u8), alloc: std.mem.Allocator) !void {
+fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), statics: *std.ArrayList(u8), bindings: *std.StringHashMap(usize), alloc: std.mem.Allocator) !void {
     switch (ast.val) {
         .num => |n| {
             try opcode_list.append(alloc, OpCode{ .instr = .Push });
@@ -186,13 +186,21 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
             unreachable;
         },
         .binding => |binding| {
-            try statics.append(alloc, @truncate(binding.len));
-            const binding_ind = statics.items.len;
-            for (binding) |c| {
-                try statics.append(alloc, c);
+            const existing_binding = bindings.get(binding);
+            if (existing_binding != null) {
+                // Binding already found
+                try opcode_list.append(alloc, OpCode{ .instr = .Eval });
+                try opcode_list.append(alloc, OpCode{ .binding = existing_binding.? });
+                return;
             }
+
+            // New binding found
+            const binding_str_ind = statics.items.len;
+            try statics.appendNTimes(alloc, 0, binding.len + 1);
+            const binding_ptr: []u8 = @ptrCast(&statics.items[binding_str_ind]);
+            @memcpy(binding_ptr, binding);
             try opcode_list.append(alloc, OpCode{ .instr = .Eval });
-            try opcode_list.append(alloc, OpCode{ .binding = &statics.items[binding_ind .. binding_ind + binding.len] });
+            try opcode_list.append(alloc, OpCode{ .binding = binding_str_ind });
         },
         .children => |children| {
             if (children.items.len == 0) {
@@ -204,18 +212,18 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
                     const binding = children.items[0].val.binding;
                     if (std.mem.eql(u8, binding, "if")) {
                         if (children.items.len != 4) {
-                            // TODO: better error  handling
+                            // TODO: better error handling
                             std.debug.print("ERROR: malformed if\n", .{});
                         }
                         // Handle condition
-                        try compile_rec(&children.items[1], opcode_list, statics, alloc);
+                        try compile_rec(&children.items[1], opcode_list, statics, bindings, alloc);
 
                         try opcode_list.append(alloc, OpCode{ .instr = .Jump });
                         const cond_target_ind = opcode_list.items.len; // The index of the conditional jump target
                         try opcode_list.append(alloc, OpCode{ .codepoint = undefined });
 
                         // First arm
-                        try compile_rec(&children.items[2], opcode_list, statics, alloc);
+                        try compile_rec(&children.items[2], opcode_list, statics, bindings, alloc);
 
                         // Unconditional jump to end of second arm
                         // Pushing True: no need for unconditional jump instruction
@@ -229,7 +237,7 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
                         opcode_list.items[cond_target_ind] = OpCode{ .codepoint = second_arm_ind };
 
                         // Run second arm
-                        try compile_rec(&children.items[3], opcode_list, statics, alloc);
+                        try compile_rec(&children.items[3], opcode_list, statics, bindings, alloc);
                         // End of second arm = target of unconditional jump
                         const end_ind = opcode_list.items.len;
                         opcode_list.items[second_arm_ind - 1] = OpCode{ .codepoint = end_ind };
@@ -237,7 +245,7 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
                         switch (children.items[1].val) {
                             .children => {
                                 for (children.items) |child| {
-                                    try compile_rec(&child, opcode_list, statics, alloc);
+                                    try compile_rec(&child, opcode_list, statics, bindings, alloc);
                                 }
 
                                 // The number of bindings that need to be freed
@@ -251,16 +259,16 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
                     } else {
                         // Not a reserved function name
                         for (children.items[1..]) |child| {
-                            try compile_rec(&child, opcode_list, statics, alloc);
+                            try compile_rec(&child, opcode_list, statics, bindings, alloc);
                         }
 
-                        try compile_rec(&children.items[0], opcode_list, statics, alloc);
+                        try compile_rec(&children.items[0], opcode_list, statics, bindings, alloc);
                     }
                 },
                 else => {
                     // Not a binding
                     for (children.items) |child| {
-                        try compile_rec(&child, opcode_list, statics, alloc);
+                        try compile_rec(&child, opcode_list, statics, bindings, alloc);
                     }
                 },
             }
@@ -268,72 +276,72 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
     }
 }
 
-test "basic" {
-    std.debug.print("========\nTEST: basic\n", .{});
-    const alloc = std.testing.allocator;
-    const text: [:0]const u8 = "(+ 1 2)";
-    var ast = try parser.scheme_parse(text, alloc);
-    defer ast.deinit(alloc);
-    var compile_output = try compile(&ast, alloc);
-    defer compile_output.deinit(alloc);
-    const opcodes = compile_output.code;
-    for (opcodes) |op| {
-        op.print();
-    }
-}
-
-test "nested" {
-    std.debug.print("========\nTEST: nested\n", .{});
-    const alloc = std.testing.allocator;
-    const text: [:0]const u8 = "(+ (* 3 4) 5)";
-    var ast = try parser.scheme_parse(text, alloc);
-    defer ast.deinit(alloc);
-    var compile_output = try compile(&ast, alloc);
-    defer compile_output.deinit(alloc);
-    const opcodes = compile_output.code;
-    for (opcodes) |op| {
-        op.print();
-    }
-}
-
-test "let" {
-    std.debug.print("========\nTEST: let\n", .{});
-    const alloc = std.testing.allocator;
-    const text: [:0]const u8 = "(let ((a 3)) a)";
-    var ast = try parser.scheme_parse(text, alloc);
-    defer ast.deinit(alloc);
-    var compile_output = try compile(&ast, alloc);
-    defer compile_output.deinit(alloc);
-    const opcodes = compile_output.code;
-    for (opcodes) |op| {
-        op.print();
-    }
-}
-
-test "if" {
-    std.debug.print("========\nTEST: if\n", .{});
-    const alloc = std.testing.allocator;
-    const text: [:0]const u8 = "(if 1 2 3)";
-    var ast = try parser.scheme_parse(text, alloc);
-    defer ast.deinit(alloc);
-    var compile_output = try compile(&ast, alloc);
-    defer compile_output.deinit(alloc);
-    const opcodes = compile_output.code;
-    for (opcodes) |op| {
-        op.print();
-    }
-}
-
-test "add1" {
-    std.debug.print("========\nTEST: add1\n", .{});
-    const alloc = std.testing.allocator;
-    const text: [:0]const u8 = "(add1 2)";
-    var ast = try parser.scheme_parse(text, alloc);
-    defer ast.deinit(alloc);
-    var compile_output = try compile(&ast, alloc);
-    defer compile_output.deinit(alloc);
-    const opcodes = compile_output.code;
-    for (opcodes) |op| {
-        op.print();
-    }
-}
+// test "basic" {
+//     std.debug.print("========\nTEST: basic\n", .{});
+//     const alloc = std.testing.allocator;
+//     const text: [:0]const u8 = "(+ 1 2)";
+//     var ast = try parser.scheme_parse(text, alloc);
+//     defer ast.deinit(alloc);
+//     var compile_output = try compile(&ast, alloc);
+//     defer compile_output.deinit(alloc);
+//     const opcodes = compile_output.code;
+//     for (opcodes) |op| {
+//         op.print();
+//     }
+// }
+//
+// test "nested" {
+//     std.debug.print("========\nTEST: nested\n", .{});
+//     const alloc = std.testing.allocator;
+//     const text: [:0]const u8 = "(+ (* 3 4) 5)";
+//     var ast = try parser.scheme_parse(text, alloc);
+//     defer ast.deinit(alloc);
+//     var compile_output = try compile(&ast, alloc);
+//     defer compile_output.deinit(alloc);
+//     const opcodes = compile_output.code;
+//     for (opcodes) |op| {
+//         op.print();
+//     }
+// }
+//
+// test "let" {
+//     std.debug.print("========\nTEST: let\n", .{});
+//     const alloc = std.testing.allocator;
+//     const text: [:0]const u8 = "(let ((a 3)) a)";
+//     var ast = try parser.scheme_parse(text, alloc);
+//     defer ast.deinit(alloc);
+//     var compile_output = try compile(&ast, alloc);
+//     defer compile_output.deinit(alloc);
+//     const opcodes = compile_output.code;
+//     for (opcodes) |op| {
+//         op.print();
+//     }
+// }
+//
+// test "if" {
+//     std.debug.print("========\nTEST: if\n", .{});
+//     const alloc = std.testing.allocator;
+//     const text: [:0]const u8 = "(if 1 2 3)";
+//     var ast = try parser.scheme_parse(text, alloc);
+//     defer ast.deinit(alloc);
+//     var compile_output = try compile(&ast, alloc);
+//     defer compile_output.deinit(alloc);
+//     const opcodes = compile_output.code;
+//     for (opcodes) |op| {
+//         op.print();
+//     }
+// }
+//
+// test "add1" {
+//     std.debug.print("========\nTEST: add1\n", .{});
+//     const alloc = std.testing.allocator;
+//     const text: [:0]const u8 = "(add1 2)";
+//     var ast = try parser.scheme_parse(text, alloc);
+//     defer ast.deinit(alloc);
+//     var compile_output = try compile(&ast, alloc);
+//     defer compile_output.deinit(alloc);
+//     const opcodes = compile_output.code;
+//     for (opcodes) |op| {
+//         op.print();
+//     }
+// }

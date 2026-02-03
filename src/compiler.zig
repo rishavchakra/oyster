@@ -186,18 +186,21 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
             unreachable;
         },
         .binding => |binding| {
-            const existing_binding = bindings.get(binding);
-            if (existing_binding != null) {
+            if (bindings.contains(binding)) {
                 // Binding already found
+                std.debug.print("Found an existing binding: {s}\n", .{binding});
+                const existing_binding_ind = bindings.get(binding).?;
                 try opcode_list.append(alloc, OpCode{ .instr = .Eval });
-                try opcode_list.append(alloc, OpCode{ .binding = existing_binding.? });
+                try opcode_list.append(alloc, OpCode{ .binding = existing_binding_ind });
                 return;
             }
 
+            std.debug.print("Found a new binding: {s}\n", .{binding});
             // New binding found
+            try statics.append(alloc, @as(u8, @truncate(binding.len)));
             const binding_str_ind = statics.items.len;
-            try statics.appendNTimes(alloc, 0, binding.len + 1);
-            const binding_ptr: []u8 = @ptrCast(&statics.items[binding_str_ind]);
+            try statics.appendNTimes(alloc, 0, binding.len);
+            const binding_ptr = statics.items[binding_str_ind .. binding_str_ind + binding.len];
             @memcpy(binding_ptr, binding);
             try opcode_list.append(alloc, OpCode{ .instr = .Eval });
             try opcode_list.append(alloc, OpCode{ .binding = binding_str_ind });
@@ -276,72 +279,112 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
     }
 }
 
-// test "basic" {
-//     std.debug.print("========\nTEST: basic\n", .{});
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "(+ 1 2)";
-//     var ast = try parser.scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     var compile_output = try compile(&ast, alloc);
-//     defer compile_output.deinit(alloc);
-//     const opcodes = compile_output.code;
-//     for (opcodes) |op| {
-//         op.print();
-//     }
-// }
-//
-// test "nested" {
-//     std.debug.print("========\nTEST: nested\n", .{});
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "(+ (* 3 4) 5)";
-//     var ast = try parser.scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     var compile_output = try compile(&ast, alloc);
-//     defer compile_output.deinit(alloc);
-//     const opcodes = compile_output.code;
-//     for (opcodes) |op| {
-//         op.print();
-//     }
-// }
-//
-// test "let" {
-//     std.debug.print("========\nTEST: let\n", .{});
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "(let ((a 3)) a)";
-//     var ast = try parser.scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     var compile_output = try compile(&ast, alloc);
-//     defer compile_output.deinit(alloc);
-//     const opcodes = compile_output.code;
-//     for (opcodes) |op| {
-//         op.print();
-//     }
-// }
-//
-// test "if" {
-//     std.debug.print("========\nTEST: if\n", .{});
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "(if 1 2 3)";
-//     var ast = try parser.scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     var compile_output = try compile(&ast, alloc);
-//     defer compile_output.deinit(alloc);
-//     const opcodes = compile_output.code;
-//     for (opcodes) |op| {
-//         op.print();
-//     }
-// }
-//
-// test "add1" {
-//     std.debug.print("========\nTEST: add1\n", .{});
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "(add1 2)";
-//     var ast = try parser.scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     var compile_output = try compile(&ast, alloc);
-//     defer compile_output.deinit(alloc);
-//     const opcodes = compile_output.code;
-//     for (opcodes) |op| {
-//         op.print();
-//     }
-// }
+test "basic" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(+ 1 2)";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const opcodes = compile_output.code;
+    try std.testing.expectEqual(7, opcodes.len);
+    const expected = [_]OpCode{
+        OpCode{ .instr = .Push },
+        OpCode{ .int = Int.init(1) },
+        OpCode{ .instr = .Push },
+        OpCode{ .int = Int.init(2) },
+        OpCode{ .instr = .Eval },
+        OpCode{ .raw = 1 }, // First binding: +
+        OpCode{ .instr = .Return },
+    };
+    for (expected, opcodes, 0..) |e, a, i| {
+        std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
+    }
+}
+
+test "nested" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(+ (* 3 4) 5)";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const opcodes = compile_output.code;
+    try std.testing.expectEqual(11, opcodes.len);
+    const expected = [_]OpCode{
+        OpCode{ .instr = .Push },
+        OpCode{ .int = Int.init(3) },
+        OpCode{ .instr = .Push },
+        OpCode{ .int = Int.init(4) },
+        OpCode{ .instr = .Eval },
+        OpCode{ .raw = 1 }, // First binding: *
+        OpCode{ .instr = .Push },
+        OpCode{ .int = Int.init(5) },
+        OpCode{ .instr = .Eval },
+        OpCode{ .raw = 3 }, // Second binding: +
+        OpCode{ .instr = .Return },
+    };
+    for (expected, opcodes, 0..) |e, a, i| {
+        std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
+    }
+}
+
+test "let" {
+    std.debug.print("========\nTEST: let\n", .{});
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(let ((a 3)) a)";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const opcodes = compile_output.code;
+    for (opcodes) |op| {
+        op.print();
+    }
+
+    try std.testing.expectEqual(11, opcodes.len);
+    const expected = [_]OpCode{
+        OpCode{ .instr = .Eval },
+        OpCode{ .raw = 1 }, // First binding: let
+        OpCode{ .instr = .Push },
+        OpCode{ .int = Int.init(3) },
+        OpCode{ .instr = .Eval },
+        OpCode{ .raw = 5 }, // binding name: a
+        OpCode{ .instr = .Push },
+        OpCode{ .int = Int.init(5) },
+        OpCode{ .instr = .Eval },
+        OpCode{ .raw = 3 }, // Second binding: +
+        OpCode{ .instr = .Return },
+    };
+    for (expected, opcodes, 0..) |e, a, i| {
+        std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
+    }
+}
+
+test "if" {
+    std.debug.print("========\nTEST: if\n", .{});
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(if 1 2 3)";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const opcodes = compile_output.code;
+    for (opcodes) |op| {
+        op.print();
+    }
+}
+
+test "add1" {
+    std.debug.print("========\nTEST: add1\n", .{});
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(add1 2)";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const opcodes = compile_output.code;
+    for (opcodes) |op| {
+        op.print();
+    }
+}

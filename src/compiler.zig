@@ -24,11 +24,11 @@ pub const Int = packed struct {
 };
 
 pub const Boolean = packed struct {
-    tag: u7,
+    tag: u8,
     val: bool,
     pub fn init(val: bool) Boolean {
         return Boolean{
-            .tag = 0b001_1111,
+            .tag = 0b1111_1111,
             .val = val,
         };
     }
@@ -83,7 +83,7 @@ pub const OpCode = packed union {
             return .int;
         }
         const as_bool = self.boolean;
-        if (as_bool.tag == 0b001_1111) {
+        if (as_bool.tag == 0b1111_1111) {
             return .boolean;
         }
         const as_char = self.char;
@@ -400,9 +400,31 @@ test "add1" {
     try std.testing.expectEqual(5, opcodes.len);
     const expected = [_]OpCode{
         OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(2) }, // First binding: let
+        OpCode{ .int = Int.init(2) },
         OpCode{ .instr = .Eval },
-        OpCode{ .raw = 1 },
+        OpCode{ .raw = 1 }, // First binding: add1
+        OpCode{ .instr = .Return },
+    };
+    for (expected, opcodes, 0..) |e, a, i| {
+        std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
+    }
+}
+
+test "char" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(atoi '4')";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const opcodes = compile_output.code;
+
+    try std.testing.expectEqual(5, opcodes.len);
+    const expected = [_]OpCode{
+        OpCode{ .instr = .Push },
+        OpCode{ .char = Char.init('4') },
+        OpCode{ .instr = .Eval },
+        OpCode{ .raw = 1 }, // First binding: atoi
         OpCode{ .instr = .Return },
     };
     for (expected, opcodes, 0..) |e, a, i| {

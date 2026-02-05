@@ -155,6 +155,14 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
                     text_ptr += 1;
                     continue :token text[text_ptr];
                 },
+                // '\'' => {
+                //     if (text_ptr != start_text_ptr) {
+                //         // This is a problem. Chars and quote strings require ' to be the first char
+                //         std.debug.print("ERROR: Encountered ' in middle of token\n", .{});
+                //     }
+                //     text_ptr += 1;
+                //     continue :parse .quot;
+                // },
                 ' ', '\t', '\r', '\n' => {
                     // End of token: save string as token and continue
                     text_ptr += 1;
@@ -187,17 +195,21 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
             continue :parse .expr;
         },
         .quot => {
-            var chars_list = try std.ArrayList(u8).initCapacity(alloc, 16);
+            var chars_list = try std.ArrayList(u8).initCapacity(alloc, 2);
             defer chars_list.deinit(alloc);
             var num_chars: usize = 0;
             quot: switch (text[text_ptr]) {
                 '\'' => {
                     // End quote
+                    text_ptr += 1;
                     break :quot;
                 },
-                7...38, 40...127 => {
-                    // Non-control characters
+                32...38, 40...127 => |c| {
+                    // Non-control, non-quote characters
+                    try chars_list.append(alloc, c);
+                    text_ptr += 1;
                     num_chars += 1;
+                    continue :quot text[text_ptr];
                 },
                 0 => {
                     break :quot;
@@ -255,77 +267,89 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
     return ast;
 }
 
-// test "parse newlines" {
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "\n\n\n\n";
-//     var ast = try scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     try std.testing.expectEqual(@intFromEnum(AST.Node.children), @intFromEnum(ast.val));
-//     try std.testing.expectEqual(0, ast.val.children.items.len);
-//     try std.testing.expectEqual(null, ast.parent);
-// }
-//
-// test "parse number" {
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "5\n10";
-//     var ast = try scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     try std.testing.expectEqual(2, ast.val.children.items.len);
-//     try std.testing.expectEqual(5, ast.val.children.items[0].val.num);
-//     try std.testing.expectEqual(10, ast.val.children.items[1].val.num);
-// }
-//
-// test "parse float" {
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "3.2";
-//     var ast = try scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     try std.testing.expectEqual(1, ast.val.children.items.len);
-//     try std.testing.expectEqual(3.2, ast.val.children.items[0].val.float);
-// }
-//
-// test "parse binding" {
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "varname";
-//     var ast = try scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     try std.testing.expectEqual(1, ast.val.children.items.len);
-//     try std.testing.expectEqualStrings("varname", ast.val.children.items[0].val.binding);
-// }
-//
-// test "parse let" {
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "(let ((a 3)) a)";
-//     var ast = try scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     try std.testing.expectEqual(1, ast.val.children.items.len);
-//     const expr = ast.val.children.items[0].val;
-//     try std.testing.expectEqual(3, expr.children.items.len);
-//     try std.testing.expectEqualStrings("let", expr.children.items[0].val.binding);
-//     try std.testing.expectEqualStrings("a", expr.children.items[2].val.binding);
-//     try std.testing.expectEqual(1, expr.children.items[1].val.children.items.len);
-// }
-//
-// test "parse expr" {
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "(funcname 5 3)";
-//     var ast = try scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     try std.testing.expectEqual(1, ast.val.children.items.len);
-//     const expr = ast.val.children.items[0].val;
-//     try std.testing.expectEqual(3, expr.children.items.len);
-//     try std.testing.expectEqualStrings("funcname", expr.children.items[0].val.binding);
-//     try std.testing.expectEqual(5, expr.children.items[1].val.num);
-//     try std.testing.expectEqual(3, expr.children.items[2].val.num);
-// }
-//
-// test "parse nested parens" {
-//     const alloc = std.testing.allocator;
-//     const text: [:0]const u8 = "((()))";
-//     var ast = try scheme_parse(text, alloc);
-//     defer ast.deinit(alloc);
-//     try std.testing.expectEqual(1, ast.val.children.items.len);
-//     try std.testing.expectEqual(1, ast.val.children.items[0].val.children.items.len);
-//     try std.testing.expectEqual(1, ast.val.children.items[0].val.children.items[0].val.children.items.len);
-//     try std.testing.expectEqual(0, ast.val.children.items[0].val.children.items[0].val.children.items[0].val.children.items.len);
-// }
+test "parse newlines" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "\n\n\n\n";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(@intFromEnum(AST.Node.children), @intFromEnum(ast.val));
+    try std.testing.expectEqual(0, ast.val.children.items.len);
+    try std.testing.expectEqual(null, ast.parent);
+}
+
+test "parse number" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "5\n10";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(2, ast.val.children.items.len);
+    try std.testing.expectEqual(5, ast.val.children.items[0].val.num);
+    try std.testing.expectEqual(10, ast.val.children.items[1].val.num);
+}
+
+test "parse float" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "3.2";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(1, ast.val.children.items.len);
+    try std.testing.expectEqual(3.2, ast.val.children.items[0].val.float);
+}
+
+test "parse binding" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "varname";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(1, ast.val.children.items.len);
+    try std.testing.expectEqualStrings("varname", ast.val.children.items[0].val.binding);
+}
+
+test "parse let" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(let ((a 3)) a)";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(1, ast.val.children.items.len);
+    const expr = ast.val.children.items[0].val;
+    try std.testing.expectEqual(3, expr.children.items.len);
+    try std.testing.expectEqualStrings("let", expr.children.items[0].val.binding);
+    try std.testing.expectEqualStrings("a", expr.children.items[2].val.binding);
+    try std.testing.expectEqual(1, expr.children.items[1].val.children.items.len);
+}
+
+test "parse expr" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(funcname 5 3)";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(1, ast.val.children.items.len);
+    const expr = ast.val.children.items[0].val;
+    try std.testing.expectEqual(3, expr.children.items.len);
+    try std.testing.expectEqualStrings("funcname", expr.children.items[0].val.binding);
+    try std.testing.expectEqual(5, expr.children.items[1].val.num);
+    try std.testing.expectEqual(3, expr.children.items[2].val.num);
+}
+
+test "parse nested parens" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "((()))";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(1, ast.val.children.items.len);
+    try std.testing.expectEqual(1, ast.val.children.items[0].val.children.items.len);
+    try std.testing.expectEqual(1, ast.val.children.items[0].val.children.items[0].val.children.items.len);
+    try std.testing.expectEqual(0, ast.val.children.items[0].val.children.items[0].val.children.items[0].val.children.items.len);
+}
+
+test "parse char" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(atoi '4')";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(1, ast.val.children.items.len);
+    const expr = ast.val.children.items[0].val;
+    try std.testing.expectEqual(2, expr.children.items.len);
+    try std.testing.expectEqualStrings("atoi", expr.children.items[0].val.binding);
+    try std.testing.expectEqual('4', expr.children.items[1].val.char);
+}

@@ -180,7 +180,11 @@ fn native_atoi(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator
     const arg = stack.pop().?;
     const arg_type = arg.type_of();
     if (arg_type == .Char) {
-        try stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.char.val) });
+        if (arg.char.val < '0' or arg.char.val > '9') {
+            std.debug.print("ERROR: Bad char in atoi\n", .{});
+            return;
+        }
+        try stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.char.val - 48) });
     }
     // TODO: handle typeerror case
 }
@@ -190,8 +194,10 @@ fn native_itoa(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator
     const arg = stack.pop().?;
     const arg_type = arg.type_of();
     if (arg_type == .Int) {
-        const pos_val = @abs(arg.int.val);
-        try stack.append(alloc, compiler.OpCode{ .char = compiler.OpChar.init(@truncate(pos_val)) });
+        if (arg.int.val < 0 or arg.int.val > 9) {
+            std.debug.print("ERROR: int out of bounds in itoa\n", .{});
+        }
+        try stack.append(alloc, compiler.OpCode{ .char = compiler.OpChar.init(@as(u8, @truncate(@abs(arg.int.val))) + '0') });
     }
     // TODO: handle typeerror case
 }
@@ -266,4 +272,30 @@ test native_dec {
     const opcode = compiler.OpCode{ .raw = res };
     try std.testing.expectEqual(.Int, opcode.type_of());
     try std.testing.expectEqual(3, opcode.int.val);
+}
+
+test native_atoi {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(atoi '2')";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compiler.compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const res = try interpret(compile_output, alloc);
+    const opcode = compiler.OpCode{ .raw = res };
+    try std.testing.expectEqual(.int, opcode.type_of());
+    try std.testing.expectEqual(2, opcode.int.val);
+}
+
+test native_itoa {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(itoa 2)";
+    var ast = try parser.scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    var compile_output = try compiler.compile(&ast, alloc);
+    defer compile_output.deinit(alloc);
+    const res = try interpret(compile_output, alloc);
+    const opcode = compiler.OpCode{ .raw = res };
+    try std.testing.expectEqual(.char, opcode.type_of());
+    try std.testing.expectEqual('2', opcode.char.val);
 }

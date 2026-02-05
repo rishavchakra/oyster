@@ -28,8 +28,8 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
     run: while (true) {
         const optype = opcodes[pc].type_of();
         switch (optype) {
-            .instr => {
-                switch (opcodes[pc].instr) {
+            .Instr => {
+                switch (opcodes[pc].instr.val) {
                     .Push => {
                         try stack.append(alloc, opcodes[pc + 1]);
                         pc += 2;
@@ -62,7 +62,7 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
                     .Jump => {
                         const cond = stack.pop().?;
                         const target = opcodes[pc + 1].codepoint;
-                        if (cond.type_of() == .boolean and !cond.boolean.val) {
+                        if (cond.type_of() == .Bool and !cond.boolean.val) {
                             // Take the jump (second arm) if false
                             pc = target;
                         } else {
@@ -85,6 +85,7 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
                         try stack.append(alloc, res);
                         pc += 2;
                     },
+                    .Set => {},
                     .Return => {
                         const ret = stack.pop().?;
                         return ret.raw;
@@ -159,27 +160,27 @@ fn native_let(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator)
 fn native_inc(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
     const arg = stack.pop().?;
-    if (arg.type_of() != .int) {
+    if (arg.type_of() != .Int) {
         // return error{};
     }
-    try stack.append(alloc, compiler.OpCode{ .int = compiler.Int.init(arg.int.val + 1) });
+    try stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.int.val + 1) });
 }
 
 fn native_dec(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
     const arg = stack.pop().?;
-    if (arg.type_of() != .int) {
+    if (arg.type_of() != .Int) {
         // return error{};
     }
-    try stack.append(alloc, compiler.OpCode{ .int = compiler.Int.init(arg.int.val - 1) });
+    try stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.int.val - 1) });
 }
 
 fn native_atoi(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
     const arg = stack.pop().?;
     const arg_type = arg.type_of();
-    if (arg_type == .char) {
-        try stack.append(alloc, compiler.OpCode{ .int = compiler.Int.init(arg.char.val) });
+    if (arg_type == .Char) {
+        try stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.char.val) });
     }
     // TODO: handle typeerror case
 }
@@ -188,9 +189,9 @@ fn native_itoa(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator
     _ = binding_map;
     const arg = stack.pop().?;
     const arg_type = arg.type_of();
-    if (arg_type == .int) {
+    if (arg_type == .Int) {
         const pos_val = @abs(arg.int.val);
-        try stack.append(alloc, compiler.OpCode{ .char = compiler.Char.init(@truncate(pos_val)) });
+        try stack.append(alloc, compiler.OpCode{ .char = compiler.OpChar.init(@truncate(pos_val)) });
     }
     // TODO: handle typeerror case
 }
@@ -208,36 +209,36 @@ fn native_is_zero(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Alloca
     const arg = stack.pop().?;
     const arg_type = arg.type_of();
     const is_zero = switch (arg_type) {
-        .int => arg.int.val == 0,
-        .char => arg.char.val == 0,
-        .float => arg.float.val == 0.0,
-        .boolean => arg.boolean.val == false,
-        .raw => arg.raw == 0,
+        .Int => arg.int.val == 0,
+        .Char => arg.char.val == 0,
+        .Float => arg.float.val == 0.0,
+        .Bool => arg.boolean.val == false,
+        .Raw => arg.raw == 0,
         else => false, // TODO: Throw a type error instead
     };
-    try stack.append(alloc, compiler.OpCode{ .boolean = compiler.Boolean.init(is_zero) });
+    try stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(is_zero) });
 }
 
 fn native_is_int(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
     const arg = stack.pop().?;
     const arg_type = arg.type_of();
-    try stack.append(alloc, compiler.OpCode{ .boolean = compiler.Boolean.init(arg_type == .int) });
+    try stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(arg_type == .Int) });
 }
 
 fn native_is_bool(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
     const arg = stack.pop().?;
     const arg_type = arg.type_of();
-    try stack.append(alloc, compiler.OpCode{ .boolean = compiler.Boolean.init(arg_type == .boolean) });
+    try stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(arg_type == .Bool) });
 }
 
 fn native_not(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = binding_map;
     const arg = stack.pop().?;
     const arg_type = arg.type_of();
-    if (arg_type == .boolean) {
-        try stack.append(alloc, compiler.OpCode{ .boolean = compiler.Boolean.init(!arg.boolean.val) });
+    if (arg_type == .Bool) {
+        try stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(!arg.boolean.val) });
     }
 }
 
@@ -250,7 +251,7 @@ test native_inc {
     defer compile_output.deinit(alloc);
     const res = try interpret(compile_output, alloc);
     const opcode = compiler.OpCode{ .raw = res };
-    try std.testing.expectEqual(.int, opcode.type_of());
+    try std.testing.expectEqual(.Int, opcode.type_of());
     try std.testing.expectEqual(3, opcode.int.val);
 }
 
@@ -263,6 +264,6 @@ test native_dec {
     defer compile_output.deinit(alloc);
     const res = try interpret(compile_output, alloc);
     const opcode = compiler.OpCode{ .raw = res };
-    try std.testing.expectEqual(.int, opcode.type_of());
+    try std.testing.expectEqual(.Int, opcode.type_of());
     try std.testing.expectEqual(3, opcode.int.val);
 }

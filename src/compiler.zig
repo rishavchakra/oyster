@@ -1,63 +1,93 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 
-pub const Instr = enum(u64) {
-    Push = 0b00_0011_1111, // LOAD64
-    Jump = 0b01_0011_1111,
-    Eval = 0b10_0011_1111,
-    Squash = 0b11_0011_1111,
-    Return = 0b100_0011_1111,
+pub const Tag = enum(u32) {
+    Bool = 0b0000_0011,
+    Char,
+    Float,
+    Instr,
 };
 
-pub const Int = packed struct {
+pub const OpInt = packed struct {
     tag: u2,
     val: i62,
-    pub fn init(val: i64) Int {
+    pub fn init(val: i64) OpInt {
         if (val >= 1 << 62) {
             // Error case: int too big
         }
-        return Int{
+        return OpInt{
             .tag = 0b00,
             .val = @truncate(val),
         };
     }
 };
 
-pub const Boolean = packed struct {
-    tag: u7,
+pub const OpBool = packed struct {
+    tag: Tag,
     val: bool,
-    pub fn init(val: bool) Boolean {
-        return Boolean{
-            .tag = 0b001_1111,
+    pad: u31, // Not used
+    pub fn init(val: bool) OpBool {
+        return OpBool{
+            .tag = .Bool,
             .val = val,
+            .pad = 0,
         };
     }
 };
 
-pub const Char = packed struct {
-    tag: u8,
+pub const OpChar = packed struct {
+    tag: Tag,
     val: u8,
-    pub fn init(val: u8) Char {
-        return Char{
-            .tag = 0b0000_1111,
+    pad: u24, // Not used
+    pub fn init(val: u8) OpChar {
+        return OpChar{
+            .tag = .Char,
             .val = val,
+            .pad = 0,
         };
     }
 };
 
-pub const Float = packed struct {
-    tag: u32,
+pub const OpFloat = packed struct {
+    tag: Tag,
     val: f32,
-    pub fn init(val: f32) Float {
+    pub fn init(val: f32) OpFloat {
         // This is annoying!!
         // Floats cannot be variable-width like ints can,
         // so 32 bits is the limit. Find out what tag to use for this.
         _ = val;
-        return Float{
-            .tag = 0,
+        return OpFloat{
+            .tag = .Float,
             .val = 0.0,
         };
     }
+};
+
+pub const Instr = enum(u8) {
+    Push,
+    Jump,
+    Eval,
+    Squash,
+    Set,
+    Return,
+};
+
+pub const OpInstr = packed struct {
+    tag: Tag,
+    val: Instr,
+    pad: u24, // Not used
+    pub fn init(val: Instr) OpInstr {
+        return OpInstr{
+            .tag = .Instr,
+            .val = val,
+            .pad = 0,
+        };
+    }
+};
+
+const OpHalfWidth = packed struct {
+    tag: u32,
+    val: u32,
 };
 
 /// This does not give any comptime or runtime type checking,
@@ -65,62 +95,59 @@ pub const Float = packed struct {
 /// Just reinterpret the bits.
 pub const OpCode = packed union {
     raw: u64,
-    instr: Instr,
-    int: Int,
-    boolean: Boolean,
-    char: Char,
-    float: Float,
+    instr: OpInstr,
+    int: OpInt,
+    boolean: OpBool,
+    char: OpChar,
+    float: OpFloat,
     codepoint: usize,
     /// Bindings are not interpreted in the same way as other opcodes
     /// because they are string pointers which may step on opcode tags
     /// Bindings are indices into
     binding: usize,
+    /// This is only used internally, for easy instruction decoding
+    half: OpHalfWidth,
 
     pub fn type_of(self: OpCode) OpCodeType {
         // Read from the tags to get the true value and type of the opcode
         const as_int = self.int;
-        if (as_int.tag == 0b00) {
-            return .int;
+        if (as_int.tag == 0) {
+            return .Int;
         }
-        const as_bool = self.boolean;
-        if (as_bool.tag == 0b001_1111) {
-            return .boolean;
+
+        const tag = self.half.tag;
+        switch (tag) {
+            @intFromEnum(Tag.Bool) => return .Bool,
+            @intFromEnum(Tag.Char) => return .Char,
+            @intFromEnum(Tag.Float) => return .Float,
+            @intFromEnum(Tag.Instr) => return .Instr,
+            else => return .Raw,
         }
-        const as_char = self.char;
-        if (as_char.tag == 0b0000_1111) {
-            return .char;
-        }
-        // Instruction parsing: what are the values we use?
-        if (self.raw & 0b1111_1111 == 0b0011_1111) {
-            // const as_instr = self.instr;
-            return .instr;
-        }
-        return .raw;
     }
 
     pub fn print(self: OpCode) void {
         const op = type_of(self);
         std.debug.print("{s}:\t", .{@tagName(op)});
         switch (op) {
-            .binding => {
+            .Binding => {
                 std.debug.print("{d}\n", .{self.binding});
             },
-            .instr => {
-                std.debug.print("{s}\n", .{@tagName(self.instr)});
+            .Instr => {
+                std.debug.print("{s}\n", .{@tagName(self.instr.val)});
             },
-            .int => {
+            .Int => {
                 std.debug.print("\t{d}\n", .{self.int.val});
             },
-            .float => {
+            .Float => {
                 std.debug.print("\t{d}\n", .{self.float.val});
             },
-            .char => {
+            .Char => {
                 std.debug.print("\t{d}\n", .{self.char.val});
             },
-            .raw => {
+            .Raw => {
                 std.debug.print("\t{d}\n", .{self.raw});
             },
-            .boolean => {
+            .Bool => {
                 if (self.boolean.val) {
                     std.debug.print("T\n", .{});
                 } else {
@@ -132,13 +159,13 @@ pub const OpCode = packed union {
 };
 
 pub const OpCodeType = enum {
-    binding,
-    instr,
-    int,
-    boolean,
-    char,
-    float,
-    raw,
+    Binding,
+    Instr,
+    Int,
+    Bool,
+    Char,
+    Float,
+    Raw,
 };
 
 pub const CompileOutput = struct {
@@ -156,7 +183,7 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
     var opcode_list: std.ArrayList(OpCode) = try .initCapacity(alloc, 16);
     var bindings_set: std.StringHashMap(usize) = .init(alloc);
     try compile_rec(ast, &opcode_list, &statics, &bindings_set, alloc);
-    try opcode_list.append(alloc, OpCode{ .instr = .Return });
+    try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Return) });
     return CompileOutput{
         .statics = try statics.toOwnedSlice(alloc),
         .code = try opcode_list.toOwnedSlice(alloc),
@@ -166,20 +193,20 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
 fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), statics: *std.ArrayList(u8), bindings: *std.StringHashMap(usize), alloc: std.mem.Allocator) !void {
     switch (ast.val) {
         .num => |n| {
-            try opcode_list.append(alloc, OpCode{ .instr = .Push });
-            try opcode_list.append(alloc, OpCode{ .int = Int.init(n) });
+            try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Push) });
+            try opcode_list.append(alloc, OpCode{ .int = OpInt.init(n) });
         },
         .float => {
             // Not yet implemented
             unreachable;
         },
         .boolean => |b| {
-            try opcode_list.append(alloc, OpCode{ .instr = .Push });
-            try opcode_list.append(alloc, OpCode{ .boolean = Boolean.init(b) });
+            try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Push) });
+            try opcode_list.append(alloc, OpCode{ .boolean = OpBool.init(b) });
         },
         .char => |c| {
-            try opcode_list.append(alloc, OpCode{ .instr = .Push });
-            try opcode_list.append(alloc, OpCode{ .char = Char.init(c) });
+            try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Push) });
+            try opcode_list.append(alloc, OpCode{ .char = OpChar.init(c) });
         },
         .str => {
             // Not yet implemented
@@ -190,7 +217,7 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
                 // Binding already found
                 std.debug.print("Found an existing binding: {s}\n", .{binding});
                 const existing_binding_ind = bindings.get(binding).?;
-                try opcode_list.append(alloc, OpCode{ .instr = .Eval });
+                try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Eval) });
                 try opcode_list.append(alloc, OpCode{ .binding = existing_binding_ind });
                 return;
             }
@@ -202,7 +229,7 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
             try statics.appendNTimes(alloc, 0, binding.len);
             const binding_ptr = statics.items[binding_str_ind .. binding_str_ind + binding.len];
             @memcpy(binding_ptr, binding);
-            try opcode_list.append(alloc, OpCode{ .instr = .Eval });
+            try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Eval) });
             try opcode_list.append(alloc, OpCode{ .binding = binding_str_ind });
         },
         .children => |children| {
@@ -221,7 +248,7 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
                         // Handle condition
                         try compile_rec(&children.items[1], opcode_list, statics, bindings, alloc);
 
-                        try opcode_list.append(alloc, OpCode{ .instr = .Jump });
+                        try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Jump) });
                         const cond_target_ind = opcode_list.items.len; // The index of the conditional jump target
                         try opcode_list.append(alloc, OpCode{ .codepoint = undefined });
 
@@ -230,9 +257,9 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
 
                         // Unconditional jump to end of second arm
                         // Pushing True: no need for unconditional jump instruction
-                        try opcode_list.append(alloc, OpCode{ .instr = .Push });
-                        try opcode_list.append(alloc, OpCode{ .boolean = Boolean.init(true) });
-                        try opcode_list.append(alloc, OpCode{ .instr = .Jump });
+                        try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Push) });
+                        try opcode_list.append(alloc, OpCode{ .boolean = OpBool.init(true) });
+                        try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Jump) });
                         try opcode_list.append(alloc, OpCode{ .codepoint = undefined });
 
                         // Beginning of second arm = target of cond false
@@ -253,7 +280,7 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
 
                                 // The number of bindings that need to be freed
                                 const num_bindings = children.items[1].val.children.items.len;
-                                try opcode_list.append(alloc, OpCode{ .instr = .Squash });
+                                try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Squash) });
                                 try opcode_list.append(alloc, OpCode{ .raw = num_bindings });
                             },
                             // The first argument to let should be a list of bindings
@@ -289,13 +316,13 @@ test "basic" {
     const opcodes = compile_output.code;
     try std.testing.expectEqual(7, opcodes.len);
     const expected = [_]OpCode{
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(1) },
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(2) },
-        OpCode{ .instr = .Eval },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(1) },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(2) },
+        OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 1 }, // First binding: +
-        OpCode{ .instr = .Return },
+        OpCode{ .instr = OpInstr.init(.Return) },
     };
     for (expected, opcodes, 0..) |e, a, i| {
         std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
@@ -312,17 +339,17 @@ test "nested" {
     const opcodes = compile_output.code;
     try std.testing.expectEqual(11, opcodes.len);
     const expected = [_]OpCode{
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(3) },
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(4) },
-        OpCode{ .instr = .Eval },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(3) },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(4) },
+        OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 1 }, // First binding: *
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(5) },
-        OpCode{ .instr = .Eval },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(5) },
+        OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 3 }, // Second binding: +
-        OpCode{ .instr = .Return },
+        OpCode{ .instr = OpInstr.init(.Return) },
     };
     for (expected, opcodes, 0..) |e, a, i| {
         std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
@@ -344,17 +371,17 @@ test "let" {
 
     try std.testing.expectEqual(11, opcodes.len);
     const expected = [_]OpCode{
-        OpCode{ .instr = .Eval },
+        OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 1 }, // First binding: let
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(3) },
-        OpCode{ .instr = .Eval },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(3) },
+        OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 5 }, // binding name: a
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(5) },
-        OpCode{ .instr = .Eval },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(5) },
+        OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 3 }, // Second binding: +
-        OpCode{ .instr = .Return },
+        OpCode{ .instr = OpInstr.init(.Return) },
     };
     for (expected, opcodes, 0..) |e, a, i| {
         std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });

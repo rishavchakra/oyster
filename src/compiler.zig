@@ -69,7 +69,6 @@ pub const Instr = enum(u8) {
     Eval,
     Squash,
     Set,
-    Return,
 };
 
 pub const OpInstr = packed struct {
@@ -184,7 +183,8 @@ pub fn compile(ast: *const parser.AST, alloc: std.mem.Allocator) !CompileOutput 
     var bindings_map: std.StringHashMap(usize) = .init(alloc);
     defer bindings_map.deinit();
     try compile_rec(ast, &opcode_list, &statics, &bindings_map, alloc);
-    try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Return) });
+    try opcode_list.append(alloc, OpCode{ .instr = OpInstr.init(.Set) });
+    try opcode_list.append(alloc, OpCode{ .raw = std.math.maxInt(u64) });
     return CompileOutput{
         .statics = try statics.toOwnedSlice(alloc),
         .code = try opcode_list.toOwnedSlice(alloc),
@@ -272,9 +272,20 @@ fn compile_rec(ast: *const parser.AST, opcode_list: *std.ArrayList(OpCode), stat
                         const end_ind = opcode_list.items.len;
                         opcode_list.items[second_arm_ind - 1] = OpCode{ .codepoint = end_ind };
                     } else if (std.mem.eql(u8, binding, "let")) {
+                        // (let ((a 3)) a)
                         switch (children.items[1].val) {
-                            .children => {
-                                for (children.items) |child| {
+                            .children => |bindings_list| {
+                                for (bindings_list.items) |var_binding| {
+                                    if (var_binding.val != .children) {
+                                        std.debug.print("ERROR: malformed let\n", .{});
+                                    }
+                                    try compile_rec(&var_binding, opcode_list, statics, bindings, alloc);
+
+                                    const set_opcode_ind = opcode_list.items.len - 2;
+                                    opcode_list.items[set_opcode_ind] = OpCode{ .instr = OpInstr.init(.Set) };
+                                }
+
+                                for (children.items[2..]) |child| {
                                     try compile_rec(&child, opcode_list, statics, bindings, alloc);
                                 }
 
@@ -314,7 +325,7 @@ test "basic" {
     var compile_output = try compile(&ast, alloc);
     defer compile_output.deinit(alloc);
     const opcodes = compile_output.code;
-    try std.testing.expectEqual(7, opcodes.len);
+    try std.testing.expectEqual(8, opcodes.len);
     const expected = [_]OpCode{
         OpCode{ .instr = OpInstr.init(.Push) },
         OpCode{ .int = OpInt.init(1) },
@@ -322,7 +333,8 @@ test "basic" {
         OpCode{ .int = OpInt.init(2) },
         OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 1 }, // First binding: +
-        OpCode{ .instr = OpInstr.init(.Return) },
+        OpCode{ .instr = OpInstr.init(.Set) },
+        OpCode{ .raw = std.math.maxInt(u64) },
     };
     for (expected, opcodes, 0..) |e, a, i| {
         std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
@@ -338,7 +350,7 @@ test "nested" {
     defer compile_output.deinit(alloc);
     const opcodes = compile_output.code;
 
-    try std.testing.expectEqual(11, opcodes.len);
+    try std.testing.expectEqual(12, opcodes.len);
     const expected = [_]OpCode{
         OpCode{ .instr = OpInstr.init(.Push) },
         OpCode{ .int = OpInt.init(3) },
@@ -350,7 +362,8 @@ test "nested" {
         OpCode{ .int = OpInt.init(5) },
         OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 3 }, // Second binding: +
-        OpCode{ .instr = OpInstr.init(.Return) },
+        OpCode{ .instr = OpInstr.init(.Set) },
+        OpCode{ .raw = std.math.maxInt(u64) },
     };
     for (expected, opcodes, 0..) |e, a, i| {
         std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
@@ -366,19 +379,18 @@ test "let" {
     defer compile_output.deinit(alloc);
     const opcodes = compile_output.code;
 
-    try std.testing.expectEqual(11, opcodes.len);
+    try std.testing.expectEqual(10, opcodes.len);
     const expected = [_]OpCode{
-        OpCode{ .instr = OpInstr.init(.Eval) },
-        OpCode{ .raw = 1 }, // First binding: let
         OpCode{ .instr = OpInstr.init(.Push) },
         OpCode{ .int = OpInt.init(3) },
+        OpCode{ .instr = OpInstr.init(.Set) },
+        OpCode{ .raw = 1 }, // binding name: a
         OpCode{ .instr = OpInstr.init(.Eval) },
-        OpCode{ .raw = 5 }, // binding name: a
-        OpCode{ .instr = OpInstr.init(.Eval) },
-        OpCode{ .raw = 5 }, // binding name: a
+        OpCode{ .raw = 1 }, // binding name: a
         OpCode{ .instr = OpInstr.init(.Squash) },
         OpCode{ .raw = 1 }, // Squash one let binding down
-        OpCode{ .instr = OpInstr.init(.Return) },
+        OpCode{ .instr = OpInstr.init(.Set) },
+        OpCode{ .raw = std.math.maxInt(u64) },
     };
     for (expected, opcodes, 0..) |e, a, i| {
         std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
@@ -394,21 +406,22 @@ test "if" {
     defer compile_output.deinit(alloc);
     const opcodes = compile_output.code;
 
-    try std.testing.expectEqual(13, opcodes.len);
+    try std.testing.expectEqual(14, opcodes.len);
     const expected = [_]OpCode{
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(1) }, // First binding: let
-        OpCode{ .instr = .Jump },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(1) }, // First binding: let
+        OpCode{ .instr = OpInstr.init(.Jump) },
         OpCode{ .raw = 10 },
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(2) }, // binding name: a
-        OpCode{ .instr = .Push },
-        OpCode{ .boolean = Boolean.init(true) }, // binding name: a
-        OpCode{ .instr = .Jump },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(2) }, // binding name: a
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .boolean = OpBool.init(true) }, // binding name: a
+        OpCode{ .instr = OpInstr.init(.Jump) },
         OpCode{ .raw = 12 }, // binding name: a
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(3) }, // Squash one let binding down
-        OpCode{ .instr = .Return },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(3) }, // Squash one let binding down
+        OpCode{ .instr = OpInstr.init(.Set) },
+        OpCode{ .raw = std.math.maxInt(u64) },
     };
     for (expected, opcodes, 0..) |e, a, i| {
         std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
@@ -424,13 +437,14 @@ test "add1" {
     defer compile_output.deinit(alloc);
     const opcodes = compile_output.code;
 
-    try std.testing.expectEqual(5, opcodes.len);
+    try std.testing.expectEqual(6, opcodes.len);
     const expected = [_]OpCode{
-        OpCode{ .instr = .Push },
-        OpCode{ .int = Int.init(2) },
-        OpCode{ .instr = .Eval },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .int = OpInt.init(2) },
+        OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 1 }, // First binding: add1
-        OpCode{ .instr = .Return },
+        OpCode{ .instr = OpInstr.init(.Set) },
+        OpCode{ .raw = std.math.maxInt(u64) },
     };
     for (expected, opcodes, 0..) |e, a, i| {
         std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });
@@ -446,13 +460,14 @@ test "char" {
     defer compile_output.deinit(alloc);
     const opcodes = compile_output.code;
 
-    try std.testing.expectEqual(5, opcodes.len);
+    try std.testing.expectEqual(6, opcodes.len);
     const expected = [_]OpCode{
-        OpCode{ .instr = .Push },
-        OpCode{ .char = Char.init('4') },
-        OpCode{ .instr = .Eval },
+        OpCode{ .instr = OpInstr.init(.Push) },
+        OpCode{ .char = OpChar.init('4') },
+        OpCode{ .instr = OpInstr.init(.Eval) },
         OpCode{ .raw = 1 }, // First binding: atoi
-        OpCode{ .instr = .Return },
+        OpCode{ .instr = OpInstr.init(.Set) },
+        OpCode{ .raw = std.math.maxInt(u64) },
     };
     for (expected, opcodes, 0..) |e, a, i| {
         std.testing.expectEqual(e.raw, a.raw) catch std.debug.print("ERROR: index {d} does not match (raw): {d}, {d}\n", .{ i, e.raw, a.raw });

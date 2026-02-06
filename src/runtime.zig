@@ -85,10 +85,32 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
                         try stack.append(alloc, res);
                         pc += 2;
                     },
-                    .Set => {},
-                    .Return => {
-                        const ret = stack.pop().?;
-                        return ret.raw;
+                    .Set => {
+                        const val = stack.pop().?.raw;
+                        const binding = opcodes[pc + 1].raw;
+                        if (binding == std.math.maxInt(u64)) {
+                            // Handle: return value
+                            return val;
+                        }
+
+                        // Handle setting a binding to a new value
+                        const binding_ind = opcodes[pc + 1].binding;
+                        const binding_len = bytecode.statics[binding_ind - 1];
+                        const binding_name = bytecode.statics[binding_ind .. binding_ind + binding_len];
+                        var found_binding = try bindings.getOrPut(binding_name);
+                        if (found_binding.found_existing) {
+                            // Have a list, add the binding onto it
+                            try found_binding.value_ptr.append(alloc, Binding{ .stack = stack.items.len - 1 });
+                        } else {
+                            // Make a new list, put it on the binding
+                            var binding_list = try BindingList.initCapacity(alloc, 1);
+                            try binding_list.append(alloc, Binding{ .stack = stack.items.len - 1 });
+                            found_binding.value_ptr = &binding_list;
+                        }
+
+                        // Push the binding back onto the stack, along with its value
+                        try stack.append(alloc, compiler.OpCode{ .binding = binding });
+                        try stack.append(alloc, compiler.OpCode{ .raw = val });
                     },
                 }
             },
@@ -143,7 +165,7 @@ pub fn deinit_bindings(bindings: *BindingMap, alloc: std.mem.Allocator) void {
 
 //================ Native Functions ================
 
-fn native_let(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
+fn reserved_let(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
     _ = stack;
     _ = binding_map;
     _ = alloc;
@@ -283,7 +305,7 @@ test native_atoi {
     defer compile_output.deinit(alloc);
     const res = try interpret(compile_output, alloc);
     const opcode = compiler.OpCode{ .raw = res };
-    try std.testing.expectEqual(.int, opcode.type_of());
+    try std.testing.expectEqual(.Int, opcode.type_of());
     try std.testing.expectEqual(2, opcode.int.val);
 }
 
@@ -296,6 +318,6 @@ test native_itoa {
     defer compile_output.deinit(alloc);
     const res = try interpret(compile_output, alloc);
     const opcode = compiler.OpCode{ .raw = res };
-    try std.testing.expectEqual(.char, opcode.type_of());
+    try std.testing.expectEqual(.Char, opcode.type_of());
     try std.testing.expectEqual('2', opcode.char.val);
 }

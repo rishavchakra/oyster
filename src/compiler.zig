@@ -3,9 +3,9 @@ const parser = @import("parser.zig");
 
 pub const Tag = enum(u32) {
     Bool = 0b0000_0011,
-    Char,
-    Float,
-    Instr,
+    Char = 0b0000_0111,
+    Float = 0b0000_1011,
+    Instr = 0b0000_1111,
 };
 
 pub const OpInt = packed struct {

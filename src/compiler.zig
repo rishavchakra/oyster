@@ -6,6 +6,7 @@ pub const Tag = enum(u32) {
     Char = 0b0000_0111,
     Float = 0b0000_1011,
     Instr = 0b0000_1111,
+    HeapPtr = 0b0001_0011,
 };
 
 pub const OpInt = packed struct {

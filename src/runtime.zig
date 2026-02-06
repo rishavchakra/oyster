@@ -7,12 +7,17 @@ const Binding = union(enum) {
     reserved: Func,
     native: Func,
     static: usize,
-    stack: usize,
+    stack_ind: usize,
 };
 const BindingList = std.ArrayList(Binding);
 const BindingMap = std.StringHashMap(BindingList);
 const BindingLifetimes = std.ArrayList(std.StringHashMap(void));
-const Func = *const fn (*Stack, *BindingMap, std.mem.Allocator) anyerror!void;
+const Env = struct {
+    stack: *Stack,
+    bindings: *BindingMap,
+    heap: std.mem.Allocator,
+};
+const Func = *const fn (Env, std.mem.Allocator) anyerror!void;
 
 pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u64 {
     const opcodes = bytecode.code;
@@ -20,6 +25,12 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
 
     var stack: Stack = try .initCapacity(alloc, 64);
     defer stack.deinit(alloc);
+
+    var heap_buf: [1024]u8 = undefined;
+    var fba: std.heap.FixedBufferAllocator = .init(&heap_buf);
+    var arena: std.heap.ArenaAllocator = .init(fba.allocator());
+    defer arena.deinit();
+    const heap_alloc = arena.allocator();
 
     var bindings: BindingMap = .init(alloc);
     try init_bindings(&bindings, alloc);
@@ -45,13 +56,12 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
                         }
                         const binding = val_list.?.getLast();
                         switch (binding) {
-                            .stack => |ind| try stack.append(alloc, stack.items[ind]),
+                            .stack_ind => |ind| try stack.append(alloc, stack.items[ind]),
                             .native => |fptr| {
-                                try fptr(&stack, &bindings, alloc);
+                                try fptr(Env{ .stack = &stack, .bindings = &bindings, .heap = heap_alloc }, alloc);
                             },
                             .reserved => |fptr| {
-                                // const func = reserved_funcs[ind];
-                                try fptr(&stack, &bindings, alloc);
+                                try fptr(Env{ .stack = &stack, .bindings = &bindings, .heap = heap_alloc }, alloc);
                             },
                             .static => unreachable,
                             // unreachable for now,
@@ -74,7 +84,13 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
                         const num_squash = opcodes[pc + 1].raw;
                         const res = stack.pop().?;
                         for (0..num_squash) |_| {
-                            _ = stack.pop().?;
+                            const binding_val = stack.pop().?;
+                            const binding = stack.pop().?;
+                            const binding_ind = binding.binding;
+                            const binding_len = bytecode.statics[binding_ind - 1];
+                            const binding_name = bytecode.statics[binding_ind .. binding_ind + binding_len];
+
+                            // _ = stack.pop().?;
                             // Pop both the binding and the value off the stack.
                             // Value is useless now, but we use the binding name
                             // to remove the topmost value from the bindings list
@@ -100,11 +116,11 @@ pub fn interpret(bytecode: compiler.CompileOutput, alloc: std.mem.Allocator) !u6
                         var found_binding = try bindings.getOrPut(binding_name);
                         if (found_binding.found_existing) {
                             // Have a list, add the binding onto it
-                            try found_binding.value_ptr.append(alloc, Binding{ .stack = stack.items.len - 1 });
+                            try found_binding.value_ptr.append(alloc, Binding{ .stack_ind = stack.items.len + 1 });
                         } else {
                             // Make a new list, put it on the binding
                             var binding_list = try BindingList.initCapacity(alloc, 1);
-                            try binding_list.append(alloc, Binding{ .stack = stack.items.len - 1 });
+                            try binding_list.append(alloc, Binding{ .stack_ind = stack.items.len + 1 });
                             found_binding.value_ptr = &binding_list;
                         }
 
@@ -165,76 +181,56 @@ pub fn deinit_bindings(bindings: *BindingMap, alloc: std.mem.Allocator) void {
 
 //================ Native Functions ================
 
-fn reserved_let(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = stack;
-    _ = binding_map;
-    _ = alloc;
-    // Go through the following bindings of format:
-    // (EVAL [binding] [stack value])
-    // evaluate the stack values,
-    // put them into the bindings map,
-    // and push both binding and value onto stack.
-    // the EVAL at the beginning is an artifact of the compiler output
-    // and could be solved with a let opcode
-    // (but I think it would be funny if I had as few opcodes as possible)
-}
-
-fn native_inc(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = binding_map;
-    const arg = stack.pop().?;
+fn native_inc(env: Env, alloc: std.mem.Allocator) !void {
+    const arg = env.stack.pop().?;
     if (arg.type_of() != .Int) {
         // return error{};
     }
-    try stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.int.val + 1) });
+    try env.stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.int.val + 1) });
 }
 
-fn native_dec(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = binding_map;
-    const arg = stack.pop().?;
+fn native_dec(env: Env, alloc: std.mem.Allocator) !void {
+    const arg = env.stack.pop().?;
     if (arg.type_of() != .Int) {
         // return error{};
     }
-    try stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.int.val - 1) });
+    try env.stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.int.val - 1) });
 }
 
-fn native_atoi(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = binding_map;
-    const arg = stack.pop().?;
+fn native_atoi(env: Env, alloc: std.mem.Allocator) !void {
+    const arg = env.stack.pop().?;
     const arg_type = arg.type_of();
     if (arg_type == .Char) {
         if (arg.char.val < '0' or arg.char.val > '9') {
             std.debug.print("ERROR: Bad char in atoi\n", .{});
             return;
         }
-        try stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.char.val - 48) });
+        try env.stack.append(alloc, compiler.OpCode{ .int = compiler.OpInt.init(arg.char.val - 48) });
     }
     // TODO: handle typeerror case
 }
 
-fn native_itoa(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = binding_map;
-    const arg = stack.pop().?;
+fn native_itoa(env: Env, alloc: std.mem.Allocator) !void {
+    const arg = env.stack.pop().?;
     const arg_type = arg.type_of();
     if (arg_type == .Int) {
         if (arg.int.val < 0 or arg.int.val > 9) {
             std.debug.print("ERROR: int out of bounds in itoa\n", .{});
         }
-        try stack.append(alloc, compiler.OpCode{ .char = compiler.OpChar.init(@as(u8, @truncate(@abs(arg.int.val))) + '0') });
+        try env.stack.append(alloc, compiler.OpCode{ .char = compiler.OpChar.init(@as(u8, @truncate(@abs(arg.int.val))) + '0') });
     }
     // TODO: handle typeerror case
 }
 
-fn native_is_null(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = stack;
-    _ = binding_map;
+fn native_is_null(env: Env, alloc: std.mem.Allocator) !void {
+    _ = env;
     _ = alloc;
     // I've been testing is_null on Chicken Scheme
     // and I can't find a single value that makes this true...
 }
 
-fn native_is_zero(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = binding_map;
-    const arg = stack.pop().?;
+fn native_is_zero(env: Env, alloc: std.mem.Allocator) !void {
+    const arg = env.stack.pop().?;
     const arg_type = arg.type_of();
     const is_zero = switch (arg_type) {
         .Int => arg.int.val == 0,
@@ -244,29 +240,26 @@ fn native_is_zero(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Alloca
         .Raw => arg.raw == 0,
         else => false, // TODO: Throw a type error instead
     };
-    try stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(is_zero) });
+    try env.stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(is_zero) });
 }
 
-fn native_is_int(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = binding_map;
-    const arg = stack.pop().?;
+fn native_is_int(env: Env, alloc: std.mem.Allocator) !void {
+    const arg = env.stack.pop().?;
     const arg_type = arg.type_of();
-    try stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(arg_type == .Int) });
+    try env.stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(arg_type == .Int) });
 }
 
-fn native_is_bool(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = binding_map;
-    const arg = stack.pop().?;
+fn native_is_bool(env: Env, alloc: std.mem.Allocator) !void {
+    const arg = env.stack.pop().?;
     const arg_type = arg.type_of();
-    try stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(arg_type == .Bool) });
+    try env.stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(arg_type == .Bool) });
 }
 
-fn native_not(stack: *Stack, binding_map: *BindingMap, alloc: std.mem.Allocator) !void {
-    _ = binding_map;
-    const arg = stack.pop().?;
+fn native_not(env: Env, alloc: std.mem.Allocator) !void {
+    const arg = env.stack.pop().?;
     const arg_type = arg.type_of();
     if (arg_type == .Bool) {
-        try stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(!arg.boolean.val) });
+        try env.stack.append(alloc, compiler.OpCode{ .boolean = compiler.OpBool.init(!arg.boolean.val) });
     }
 }
 
@@ -320,4 +313,17 @@ test native_itoa {
     const opcode = compiler.OpCode{ .raw = res };
     try std.testing.expectEqual(.Char, opcode.type_of());
     try std.testing.expectEqual('2', opcode.char.val);
+}
+
+test "let" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const text: [:0]const u8 = "(let ((a 3)) a)";
+    const ast = try parser.scheme_parse(text, alloc);
+    const compile_output = try compiler.compile(&ast, alloc);
+    const res = try interpret(compile_output, alloc);
+    const opcode = compiler.OpCode{ .raw = res };
+    try std.testing.expectEqual(.Int, opcode.type_of());
+    try std.testing.expectEqual(3, opcode.int.val);
 }

@@ -5,6 +5,8 @@ const ParseStage = enum {
     token,
     expr,
     quot,
+    dbl_quot,
+    octothorpe,
 };
 
 pub const AST = struct {
@@ -225,6 +227,47 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
             }
             continue :parse .expr;
         },
+        .dbl_quot => {
+            var chars_list = try std.ArrayList(u8).initCapacity(alloc, 8);
+            defer chars_list.deinit(alloc);
+            quot: switch (text[text_ptr]) {
+                '"' => {
+                    text_ptr += 1;
+                    break :quot;
+                },
+                32...33, 35...127 => |c| {
+                    // Non-control, non-quote characters
+                    try chars_list.append(alloc, c);
+                    text_ptr += 1;
+                    continue :quot text[text_ptr];
+                },
+                0 => {
+                    break :quot;
+                },
+                else => unreachable, // TODO: proper error handling
+            }
+            try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .str = try chars_list.toOwnedSlice(alloc) } });
+            continue :parse .expr;
+        },
+        .octothorpe => {
+            // Handle #\a type character parsing
+            if (text[text_ptr] != '\\') {
+                // Don't know how to handle this yet
+                unreachable; // TODO: better error handling
+            }
+            switch (text[text_ptr + 1]) {
+                32...127 => |c| {
+                    try cur_ast.val.children.append(alloc, AST{ .parent = cur_ast, .val = AST.Node{ .char = c } });
+                },
+                else => unreachable, // TODO: proper error handling
+            }
+            if (std.ascii.isWhitespace(text[text_ptr + 2])) {
+                text_ptr += 3;
+            } else {
+                text_ptr += 2; // TODO: Better error handling for things that aren't supposed to be there
+            }
+            continue :parse .expr;
+        },
         .expr => {
             expr: switch (text[text_ptr]) {
                 ' ', '\t', '\r', '\n' => {
@@ -252,6 +295,14 @@ pub fn scheme_parse(text: [:0]const u8, alloc: std.mem.Allocator) !AST {
                 '\'' => {
                     text_ptr += 1;
                     continue :parse .quot;
+                },
+                '"' => {
+                    text_ptr += 1;
+                    continue :parse .dbl_quot;
+                },
+                '#' => {
+                    text_ptr += 1;
+                    continue :parse .octothorpe;
                 },
                 0 => {
                     // EOF
@@ -352,4 +403,26 @@ test "parse char" {
     try std.testing.expectEqual(2, expr.children.items.len);
     try std.testing.expectEqualStrings("atoi", expr.children.items[0].val.binding);
     try std.testing.expectEqual('4', expr.children.items[1].val.char);
+}
+
+test "parse str" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(string \"abcd\")";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(1, ast.val.children.items.len);
+    const expr = ast.val.children.items[0].val;
+    try std.testing.expectEqual(2, expr.children.items.len);
+    try std.testing.expectEqualStrings("string", expr.children.items[0].val.binding);
+    try std.testing.expectEqualStrings("abcd", expr.children.items[1].val.str);
+}
+
+test "parse weird" {
+    const alloc = std.testing.allocator;
+    const text: [:0]const u8 = "(string-ref (string #\\a #\\b #\\c #\\d #\\e) 3)";
+    var ast = try scheme_parse(text, alloc);
+    defer ast.deinit(alloc);
+    try std.testing.expectEqual(1, ast.val.children.items.len);
+    const expr = ast.val.children.items[0].val;
+    try std.testing.expectEqual(3, expr.children.items.len);
 }

@@ -36,12 +36,13 @@ enum BindingType {
     BINDING_ANY,
 };
 enum RunErr {
-    UNEXPECTED_CODE_RAW,
-    UNEXPECTED_CODE_ERR,
-    STACK_UNDERFLOW,
-    BAD_DEREF,
-    UNSPECIFIED,  // Unspecified (the value)
-    UNKNOWN,
+    UNEXPECTED_CODE_RAW,  // 27
+    UNEXPECTED_CODE_ERR,  // 4294967323
+    STACK_UNDERFLOW,      // 8589934619
+    BAD_DEREF,            // 12884901915
+    BAD_FNCALL,           // 17179869211
+    UNSPECIFIED,          // 21474836507
+    UNKNOWN,              // 25769803803
 };
 
 typedef uint64_t OpNum;
@@ -118,7 +119,15 @@ enum NativeFns {
     FnLetstar,
     FnLetrec,
     FnIsNull,
+    // Hidden functions
+    FnSubArgs,
+    FnIfDo,
+    FnIfDont,
 };
+
+// The number of hidden functions
+#define NUM_HIDDEN 3
+
 // clang-format off
 static char const * const native_fn_names[] = {
     "+", // add

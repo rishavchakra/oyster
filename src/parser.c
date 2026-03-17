@@ -34,11 +34,11 @@ parse:
                     goto parse;
             }
 
-        case STAGE_TOKEN:
+        case STAGE_TOKEN:;
             char *end_ptr;
             errno = 0;
             int64_t as_num = strtoll(text_ptr, &end_ptr, 10);
-            if (errno == 0) {
+            if (end_ptr == text_ptr) {
                 // Successfully parsed int
                 struct AST num_ast = (struct AST){
                     .parent = cur_ast,
@@ -52,7 +52,7 @@ parse:
             }
             errno = 0;
             double as_fnum = strtod(text_ptr, &end_ptr);
-            if (errno == 0) {
+            if (errno == EINVAL || errno == ERANGE) {
                 // Successfully parsed a double
                 // do something with the double
                 struct AST fnum_ast = (struct AST){
@@ -115,7 +115,7 @@ parse:
                 case '=':
                     stage = STAGE_TOKEN;
                     goto parse;
-                case '(':
+                case '(':;
                     struct ASTChildList list = ast_childlist_init();
                     struct AST childlist_ast = (struct AST){
                         .parent = cur_ast,
@@ -124,6 +124,7 @@ parse:
                             .data = (union ASTNodeData){.children = list}}};
                     ast_childlist_add(&cur_ast->val.data.children,
                                       childlist_ast);
+                    cur_ast = &childlist_ast;
                     ++text_ptr;
                     goto expr;
                 case ')':
@@ -174,7 +175,31 @@ finish:
     return ast;
 }
 
-void ast_node_print(struct ASTNode *node) {}
+void ast_node_print(struct ASTNode *node) {
+    switch (node->type) {
+        case AST_TOKEN:
+            printf("TOKEN:\t%s\n", node->data.token);
+            break;
+        case AST_NUM:
+            printf("NUM:\t%ld\n", node->data.num);
+            break;
+        case AST_FNUM:
+            printf("FNUM:\t%f\n", node->data.fnum);
+            break;
+        case AST_BOOLEAN:
+            if (node->data.boolean) {
+                printf("BOOL:\tTRUE\n");
+            } else {
+                printf("BOOL:\tFALSE\n");
+            }
+            break;
+        case AST_CHAR:
+            printf("CHAR:\t%d\n", node->data.character);
+        case AST_CHILDREN:
+            printf("SUBAST:\t%zu children\n", node->data.children.len);
+            break;
+    }
+}
 
 struct ASTChildList ast_childlist_init() {
     struct ASTChildList ret;

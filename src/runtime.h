@@ -55,8 +55,8 @@ union Op binding_deref(OpBinding, struct Stack *, uint8_t *heap,
 /**************** NATIVE FUNCTION DECLARATIONS ****************/
 ////////////////////////////////////////////////////////////////
 
-#define native_fn(NAME)                                 \
-    void NAME(struct OpList *code, struct Stack *stack, \
+#define native_fn(NAME)                                               \
+    void NAME(union Op arg, struct OpList *code, struct Stack *stack, \
               struct hashmap *binding_map, size_t *pc, bool *is_heap_pc)
 
 // Non-canonical order, declarations don't matter
@@ -72,5 +72,31 @@ native_fn(native_let);
 native_fn(native_letrec);
 native_fn(native_letstar);
 native_fn(native_sub);
+native_fn(native_sub_args);
+native_fn(native_ifdo);
+native_fn(native_ifdont);
+
+typedef typeof(&native_add) NativeFnPtr;
+
+// clang-format off
+static const NativeFnPtr native_fn_ptrs[] = {
+    &native_add,
+    &native_sub,
+    &native_atoi,
+    &native_dec,
+    &native_if,
+    &native_if,
+    &native_inc,
+    &native_itoa,
+    &native_lambda,
+    &native_let,
+    &native_letstar,
+    &native_letrec,
+    &native_is_null,
+    &native_sub_args,
+    &native_ifdo,
+    &native_ifdont,
+};
+// clang-format on
 
 #endif

@@ -42,6 +42,7 @@ size_t binding_find(struct BindingList *list, const char *binding) {
             return ind;
         }
     }
+    ind += NUM_HIDDEN;
     // Otherwise, it's some other defined binding. Check our own dynamic list
     char *buf = list->buf;
     const char *tok = buf;
@@ -185,7 +186,7 @@ enum RunErr op_err_get(OpErr err) {
 }
 
 enum OpType op_type(union Op op) {
-    uint64_t tag = op.raw & ((1LL ^ 32) - 1);
+    uint64_t tag = op.raw & ((1LL << 31) - 1);
     if ((tag & MASK_NUM) == TAG_NUM) {
         return OPNUM;
     }

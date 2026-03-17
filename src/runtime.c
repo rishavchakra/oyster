@@ -25,11 +25,14 @@ run:;
     switch (itype) {
         case OPINSTR:
             if (op_instr_get(ip.instr) == DO) {
+                stack_push_op(&stack, ip);  // push do
+                pc += 2;                    // Skip over arity for now
+                goto run;
             } else {
                 // DONE
                 if (get_ip(code, NULL, pc + 1, is_heap_pc).raw == ~0) {
                     // End code
-                    goto done;
+                    goto end;
                 }
             }
             break;
@@ -56,12 +59,20 @@ run:;
         case OPBOOL:
         case OPCHAR:
         case OPFNUM:;
+            if (stack_pop_op(&stack).raw == ((union Op)op_instr(DO)).raw) {
+                stack_push_op(&stack, ip);
+                ++pc;
+                goto run;
+            } else {
+                // call on this arg
+                goto call;
+            }
             // TODO: should be used as an arg for func on the stack, not pushed
             // if pops off a DO, error
-            uint8_t *oploc = stack_alloc(&stack, sizeof(union Op));
-            memcpy(oploc, &ip, sizeof(union Op));
-            pc++;
-            goto run;
+            // uint8_t *oploc = stack_alloc(&stack, sizeof(union Op));
+            // memcpy(oploc, &ip, sizeof(union Op));
+            // pc++;
+            // goto run;
         case OPRAW:
             // Raws should only be used as arguments, not as instructions/vals.
             // We may encounter a raw disguised as a different type of Op.
@@ -79,14 +90,50 @@ error:
     hashmap_free(binding_map);
     return (union Op)err;
 
-done:
+call:;
+    union Op fn = stack_pop_op(&stack);
+    if (op_type(fn) != OPBINDING) {
+        err = op_err(BAD_FNCALL);
+        goto error;
+    }
+    enum BindingType btype = op_binding_get_type(fn.binding);
+    short bind = op_binding_get_ind(fn.binding);
+    switch (btype) {
+        case BINDING_HEAP:;
+            // Needs some work
+            // Should get all the arguments and pass them to the lambda
+            // instead of just jumping to it immediately
+            uint8_t *retloc = stack_alloc(&stack, sizeof(size_t));
+            *(size_t *)retloc = pc + 1;
+            uint8_t *locloc = stack_alloc(&stack, sizeof(bool));
+            *(bool *)locloc = is_heap_pc;
+            is_heap_pc = true;
+            pc = bind;
+            break;
+        case BINDING_NATIVE:
+        case BINDING_HIDDEN:;
+            NativeFnPtr fnptr = native_fn_ptrs[bind];
+            fnptr(ip, code, &stack, binding_map, &pc, &is_heap_pc);
+            pc += 1;
+            goto run;
+        default:
+            err = op_err(BAD_FNCALL);
+            goto error;
+    }
+    goto run;
+
+end:
     if (is_heap_pc) {
         // End of lambda
+        is_heap_pc = *(bool *)stack_pop(&stack, sizeof(bool));
         pc = *(size_t *)stack_pop(&stack, sizeof(size_t));
         goto run;
     }
     // End of main execution context!
-    return stack_pop_op(&stack);
+    union Op ret = stack_pop_op(&stack);
+    stack_free(stack);
+    hashmap_free(binding_map);
+    return ret;
 }
 
 union Op get_ip(struct OpList *code, uint8_t *heap, size_t pc, bool is_heap) {
@@ -121,6 +168,7 @@ uint8_t *stack_alloc(struct Stack *stack, size_t size) {
         free(old_buf);
         stack->cap = new_cap;
     }
+    // TODO: check if this is the right pointer alignment
     uint8_t *ret = stack->buf + stack->len;
     stack->len += size;
     return ret;
@@ -131,8 +179,9 @@ uint8_t *stack_pop(struct Stack *stack, size_t size) {
         printf("ERROR: Tried to pop past beginning of stack\n");
         exit(1);
     }
+    uint8_t *ret = stack->buf + stack->len;
     stack->len -= size;
-    return stack->buf + stack->len;
+    return ret;
 }
 
 void stack_push_op(struct Stack *stack, union Op op) {
@@ -156,7 +205,7 @@ union Op stack_peek_op(struct Stack *stack) {
         return (union Op)op_err(STACK_UNDERFLOW);
     }
 
-    union Op *op_ptr = (union Op *)(stack->buf - sizeof(union Op));
+    union Op *op_ptr = (union Op *)(stack->buf);
     return *op_ptr;
 }
 
@@ -164,7 +213,7 @@ union Op stack_pop_op(struct Stack *stack) {
     if (stack->len < sizeof(union Op)) {
         return (union Op)op_err(STACK_UNDERFLOW);
     }
-    union Op *op_ptr = (union Op *)(stack->buf - sizeof(union Op));
+    union Op *op_ptr = (union Op *)(stack->buf);
     stack->len -= sizeof(union Op);
     return *op_ptr;
 }

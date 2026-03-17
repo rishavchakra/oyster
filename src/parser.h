@@ -52,6 +52,8 @@ void ast_node_print(struct ASTNode *);
 struct ASTChildList ast_childlist_init();
 void ast_childlist_free(struct ASTChildList *);
 void ast_childlist_add(struct ASTChildList *, struct AST);
+// TODO: ast free, which recursively frees all the child elements
+// and does nothing with the non-childlists
 
 struct AST parse(const char *);
 

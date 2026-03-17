@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "compiler.h"
+#include "hashmap.h"
 
 union Op run(struct OpList *);
 

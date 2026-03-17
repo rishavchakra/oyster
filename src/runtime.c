@@ -191,6 +191,7 @@ union Op binding_deref(OpBinding binding, struct Stack *stack, uint8_t *heap,
         case BINDING_NATIVE:
         case BINDING_HIDDEN:
         case BINDING_ANY:
+        default:
             // We should not be able to dereference functions or unspecified ANY
             return (union Op)op_err(BAD_DEREF);
     }

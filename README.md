@@ -134,6 +134,7 @@ However, since the bindings are unbound, and the argument passed must be a singl
 this whole rigamarole is useless.
 Instead, when we evaluate the `let`, we discard the passed-in argument and just parse the opcodes
 as (binding, value) pairs.
+Notably, this means that *an unbound binding is not an error until a function tries to use it*.
 
 Bad runtime performance: ✅
 
